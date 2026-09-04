@@ -1,0 +1,2419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EVE Online Pochven Smart Mapper v2</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>
+    :root {
+      --kyber-crimson: #9f1c1c;
+      --kyber-crimson-bright: #dc2626;
+      --kyber-obsidian: #050505;
+      --kyber-charcoal: #0a0a0a;
+      --kyber-panel: #090909;
+    }
+    [x-cloak] { display: none !important; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #0a0a0a; }
+    ::-webkit-scrollbar-thumb { background: #3f1212; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #7f1d1d; }
+    .kyber-glow { box-shadow: 0 0 24px rgba(220, 38, 38, 0.18); }
+    .kyber-logo {
+      width: 40px;
+      height: 40px;
+      flex-shrink: 0;
+      filter: drop-shadow(0 0 8px rgba(220, 38, 38, 0.6));
+    }
+    .tab-active { border-bottom: 2px solid #dc2626; color: #f87171; }
+    canvas { cursor: grab; }
+    canvas:active { cursor: grabbing; }
+    .map-stage {
+      background: #050505;
+      box-shadow: inset 0 0 0 1px rgba(127, 29, 29, 0.35);
+    }
+    .map-stage-fullscreen {
+      border-radius: 0 !important;
+      border: none !important;
+      width: 100vw;
+      height: 100vh;
+      background: #050505;
+    }
+    .map-stage-fullscreen:fullscreen,
+    .map-stage-fullscreen:-webkit-full-screen {
+      width: 100%;
+      height: 100%;
+    }
+    @keyframes pulse-red { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+    .pulse-critical { animation: pulse-red 1.5s ease-in-out infinite; }
+  </style>
+</head>
+<body class="bg-black text-zinc-200 min-h-screen" x-data="pochvenMapper()" x-init="init()">
+
+  <!-- Kybernauts emblem defs (must stay in DOM flow — display:none breaks <use>) -->
+  <svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute;overflow:hidden" aria-hidden="true">
+    <symbol id="kybernauts-emblem" viewBox="0 0 100 100">
+      <!-- Tripartite crimson glyph · 120° rotational symmetry · #7E1E12 -->
+      <g fill="#7E1E12">
+        <path d="M49.6 34.8 58.2 39.6 76.4 14.2 90.8 9.4 95.2 18.8 82.6 32.4 65.8 52.6 55.2 46.8Z"/>
+        <path d="M49.6 34.8 58.2 39.6 76.4 14.2 90.8 9.4 95.2 18.8 82.6 32.4 65.8 52.6 55.2 46.8Z" transform="rotate(120 50 50)"/>
+        <path d="M49.6 34.8 58.2 39.6 76.4 14.2 90.8 9.4 95.2 18.8 82.6 32.4 65.8 52.6 55.2 46.8Z" transform="rotate(240 50 50)"/>
+      </g>
+    </symbol>
+  </svg>
+
+  <header class="border-b border-red-900/60 bg-zinc-950/95 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-[90rem] mx-auto px-4 py-4 flex items-center justify-between gap-4">
+      <div class="flex items-center gap-3 min-w-0">
+        <svg class="kyber-logo" aria-hidden="true"><use href="#kybernauts-emblem"></use></svg>
+        <div class="min-w-0">
+          <h1 class="text-xl font-bold tracking-wide text-zinc-100">Pochven Smart Mapper <span class="text-red-500 text-sm font-normal">v2</span></h1>
+          <p class="text-xs text-zinc-500">Kybernauts · Bidirectional route linking &amp; live expiry</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-4">
+        <button type="button" @click="testEsiConnection()"
+          class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-red-900/60 bg-zinc-950 hover:bg-red-950/40 transition-colors text-xs"
+          title="Click to test ESI connection">
+          <span class="w-2.5 h-2.5 rounded-full shrink-0"
+            :class="{
+              'bg-emerald-400': esiStatus === 'online',
+              'bg-red-500': esiStatus === 'offline',
+              'bg-amber-400 animate-pulse': esiStatus === 'checking',
+              'bg-zinc-600': esiStatus === 'unknown'
+            }"></span>
+          <span class="text-zinc-300" x-text="esiStatusLabel"></span>
+          <span class="text-zinc-500" x-show="esiLatency != null" x-text="esiLatency + 'ms'"></span>
+        </button>
+        <div class="flex items-center gap-4 text-sm text-zinc-500" x-show="entries.length > 0">
+          <span><span class="text-red-400 font-semibold" x-text="entries.length"></span> connections</span>
+          <span><span class="text-emerald-400 font-semibold" x-text="twoWayCount"></span> two-way</span>
+          <span><span class="text-amber-400 font-semibold" x-text="oneWayCount"></span> one-way</span>
+        </div>
+        <svg class="kyber-logo" aria-hidden="true"><use href="#kybernauts-emblem"></use></svg>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-[90rem] mx-auto px-4 py-6 space-y-6">
+
+    <section class="bg-zinc-950 border border-red-900/60 rounded-xl p-5 kyber-glow">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-sm font-semibold uppercase tracking-wider text-red-500/90">Raw Directory Import</h2>
+        <div class="flex gap-2">
+          <button @click="parseRawText()"
+            class="px-4 py-2 bg-red-700 hover:bg-red-600 text-white text-sm font-medium rounded-lg transition-colors">
+            Parse &amp; Import
+          </button>
+          <button @click="rawText = ''"
+            class="px-4 py-2 bg-zinc-900 hover:bg-zinc-800 border border-red-900/40 text-zinc-300 text-sm rounded-lg transition-colors">
+            Clear Input
+          </button>
+        </div>
+      </div>
+      <textarea x-model="rawText" rows="8" placeholder="Paste your EVE Online bookmark directory export here...
+
+Folder headers (Locations in Otela, Personal Locations [126]) are auto-filtered.
+Only wormhole lines like H-QGB-Obanen, P-GEJ-Otela, J-ABC-C2a, PP-GUQ-Vale are imported."
+        class="w-full bg-black border border-red-900/50 rounded-lg p-4 text-sm font-mono text-zinc-300 placeholder-zinc-600 focus:outline-none focus:border-red-600 resize-y"></textarea>
+      <div x-show="parseMessage" class="mt-2 text-sm" :class="parseError ? 'text-red-400' : 'text-emerald-400'" x-text="parseMessage"></div>
+    </section>
+
+    <div class="border-b border-red-900/50 flex gap-6">
+      <button @click="activeTab = 'table'"
+        :class="activeTab === 'table' ? 'tab-active' : 'text-zinc-500 hover:text-red-400'"
+        class="pb-3 text-sm font-semibold uppercase tracking-wider transition-colors">Table View</button>
+      <button @click="activeTab = 'map'; $nextTick(() => drawMap())"
+        :class="activeTab === 'map' ? 'tab-active' : 'text-zinc-500 hover:text-red-400'"
+        class="pb-3 text-sm font-semibold uppercase tracking-wider transition-colors">2D Map View</button>
+    </div>
+
+    <!-- Table View -->
+    <section x-show="activeTab === 'table'" x-cloak class="space-y-4">
+      <div class="flex flex-wrap items-center gap-3">
+        <input x-model="searchQuery" type="text" placeholder="Search systems, sigs, authors, route status..."
+          class="flex-1 min-w-[200px] bg-zinc-950 border border-red-900/50 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-red-600">
+        <button @click="clearAll()" x-show="entries.length > 0"
+          class="px-4 py-2 bg-red-900/50 hover:bg-red-800/60 border border-red-800 text-red-300 text-sm rounded-lg transition-colors">
+          Clear All
+        </button>
+      </div>
+
+      <div class="overflow-x-auto rounded-xl border border-red-900/60 bg-zinc-950">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-red-900/40 text-left text-xs uppercase tracking-wider text-zinc-500">
+              <th class="px-3 py-3 cursor-pointer hover:text-red-400 select-none" @click="sortBy('routeStatus')">Route <span x-text="sortIcon('routeStatus')"></span></th>
+              <th class="px-3 py-3 cursor-pointer hover:text-red-400 select-none" @click="sortBy('origin')">Origin <span x-text="sortIcon('origin')"></span></th>
+              <th class="px-3 py-3 cursor-pointer hover:text-red-400 select-none" @click="sortBy('sig')">Sig ID <span x-text="sortIcon('sig')"></span></th>
+              <th class="px-3 py-3 cursor-pointer hover:text-red-400 select-none" @click="sortBy('destination')">Destination <span x-text="sortIcon('destination')"></span></th>
+              <th class="px-3 py-3 cursor-pointer hover:text-red-400 select-none" @click="sortBy('type')">Type <span x-text="sortIcon('type')"></span></th>
+              <th class="px-3 py-3">Return Route</th>
+              <th class="px-3 py-3 cursor-pointer hover:text-red-400 select-none" @click="sortBy('mass')">Mass <span x-text="sortIcon('mass')"></span></th>
+              <th class="px-3 py-3 cursor-pointer hover:text-red-400 select-none" @click="sortBy('scannedTime')">Scanned Time <span x-text="sortIcon('scannedTime')"></span></th>
+              <th class="px-3 py-3 cursor-pointer hover:text-red-400 select-none" @click="sortBy('expiryTime')">Expiration <span x-text="sortIcon('expiryTime')"></span></th>
+              <th class="px-3 py-3">Countdown</th>
+              <th class="px-3 py-3 cursor-pointer hover:text-red-400 select-none" @click="sortBy('author')">Author <span x-text="sortIcon('author')"></span></th>
+              <th class="px-3 py-3 text-center">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-if="filteredEntries.length === 0">
+              <tr><td colspan="12" class="px-4 py-12 text-center text-zinc-600">No wormhole connections parsed yet. Paste a directory export above and click Parse &amp; Import.</td></tr>
+            </template>
+            <template x-for="entry in filteredEntries" :key="entry.id">
+              <tr class="border-b border-red-950/40 hover:bg-red-950/20 transition-colors"
+                :class="{ 'bg-red-950/35': entryStatus(entry).status === 'expired', 'bg-orange-950/20': entryStatus(entry).status === 'eol' && entryStatus(entry).status !== 'expired' }">
+                <td class="px-3 py-3">
+                  <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold"
+                    :class="entry.routeStatus === 'two-way' ? 'bg-emerald-900/50 text-emerald-300 border border-emerald-700' : 'bg-amber-900/40 text-amber-300 border border-amber-700'"
+                    x-text="entry.routeStatus === 'two-way' ? '⇄ Two-way' : '→ One-way'"></span>
+                </td>
+                <td class="px-3 py-3 font-medium text-zinc-200" x-text="entry.origin"></td>
+                <td class="px-3 py-3 font-mono text-red-400" x-text="entry.sig"></td>
+                <td class="px-3 py-3 text-zinc-200" x-text="entry.destination"></td>
+                <td class="px-3 py-3">
+                  <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold"
+                    :class="typeBadgeClass(entry.type)" x-text="entry.typeLabel"></span>
+                </td>
+                <td class="px-3 py-3">
+                  <template x-if="entry.returnSig">
+                    <div class="text-xs">
+                      <span class="font-mono text-red-300/90" x-text="entry.returnSig"></span>
+                      <span class="text-zinc-500 mx-1" x-text="entry.returnType"></span>
+                      <span class="text-zinc-500" x-text="'← ' + entry.destination"></span>
+                    </div>
+                  </template>
+                  <template x-if="!entry.returnSig">
+                    <span class="text-xs text-amber-500/80 italic">No return bookmark</span>
+                  </template>
+                </td>
+                <td class="px-3 py-3 text-zinc-400 text-xs" x-text="entry.mass"></td>
+                <td class="px-3 py-3 text-zinc-400 font-mono text-xs whitespace-nowrap" x-text="entry.scannedTime || '—'"></td>
+                <td class="px-3 py-3 font-mono text-xs whitespace-nowrap" :class="expiryClass(entry)" x-text="entry.expiryTime || '—'"></td>
+                <td class="px-3 py-3">
+                  <span class="text-xs font-semibold whitespace-nowrap" :class="countdownClass(entry)" x-text="countdownText(entry)"></span>
+                  <span x-show="entry.trackCountdown && entry.eol" class="ml-1 px-1.5 py-0.5 bg-orange-900/70 text-orange-300 text-xs rounded font-bold">EOL</span>
+                </td>
+                <td class="px-3 py-3 text-zinc-500 text-xs" x-text="entry.author"></td>
+                <td class="px-3 py-3 text-center">
+                  <button @click="removeEntry(entry.id)" class="text-red-400 hover:text-red-300 text-xs px-2 py-1 rounded hover:bg-red-900/30">Delete</button>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Map View -->
+    <section x-show="activeTab === 'map'" x-cloak class="space-y-4">
+      <div class="rounded-xl border border-red-900/60 bg-zinc-950 p-3 space-y-2 kyber-glow">
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-zinc-300">
+          <span class="text-red-500/90 font-semibold uppercase tracking-wider mr-1">Connections</span>
+          <label class="flex items-center gap-1.5 cursor-pointer select-none">
+            <input type="checkbox" x-model="filters.H" @change="drawMap()" class="rounded border-red-900/60 bg-black text-emerald-500 focus:ring-red-700 focus:ring-offset-black">
+            <span class="w-3 h-3 rounded-full" style="background:#00B074"></span> Highsec (H)
+          </label>
+          <label class="flex items-center gap-1.5 cursor-pointer select-none">
+            <input type="checkbox" x-model="filters.L" @change="drawMap()" class="rounded border-red-900/60 bg-black text-yellow-500 focus:ring-red-700 focus:ring-offset-black">
+            <span class="w-3 h-3 rounded-full" style="background:#EAB308"></span> Lowsec (L)
+          </label>
+          <label class="flex items-center gap-1.5 cursor-pointer select-none">
+            <input type="checkbox" x-model="filters.N" @change="drawMap()" class="rounded border-red-900/60 bg-black text-red-500 focus:ring-red-700 focus:ring-offset-black">
+            <span class="w-3 h-3 rounded-full" style="background:#EF4444"></span> Nullsec (N)
+          </label>
+          <label class="flex items-center gap-1.5 cursor-pointer select-none">
+            <input type="checkbox" x-model="filters.J" @change="drawMap()" class="rounded border-red-900/60 bg-black text-blue-500 focus:ring-red-700 focus:ring-offset-black">
+            <span class="w-3 h-3 rounded-full" style="background:#3B82F6"></span> J/W-Space (J)
+          </label>
+          <label class="flex items-center gap-1.5 cursor-pointer select-none">
+            <input type="checkbox" x-model="filters.PP" @change="drawMap()" class="rounded border-red-900/60 bg-black text-purple-500 focus:ring-red-700 focus:ring-offset-black">
+            <span class="w-3 h-3 rounded-full" style="background:#8B5CF6"></span> P-P Internal (PP)
+          </label>
+        </div>
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-zinc-300 border-t border-red-900/40 pt-2">
+          <span class="text-red-500/90 font-semibold uppercase tracking-wider mr-1">Layers</span>
+          <label class="flex items-center gap-1.5 cursor-pointer select-none">
+            <input type="checkbox" x-model="filters.gates" @change="drawMap()" class="rounded border-red-900/60 bg-black text-zinc-400 focus:ring-red-700 focus:ring-offset-black">
+            <span class="w-6 border-t-2 border-zinc-600"></span> Stargates
+          </label>
+          <label class="flex items-center gap-1.5 cursor-pointer select-none">
+            <input type="checkbox" x-model="filters.pvp" @change="drawMap()" class="rounded border-red-900/60 bg-black text-red-500 focus:ring-red-700 focus:ring-offset-black">
+            <span class="w-3 h-3 rounded border-2 border-red-500" style="box-shadow:0 0 6px rgba(239,68,68,0.7)"></span> Active PvP
+          </label>
+          <label class="flex items-center gap-1.5 cursor-pointer select-none">
+            <input type="checkbox" x-model="filters.krai" @change="drawMap()" class="rounded border-red-900/60 bg-black text-red-400 focus:ring-red-700 focus:ring-offset-black">
+            <span class="flex gap-0.5">
+              <span class="w-2.5 h-2.5 rounded-sm" style="background:#14532d;border:1px solid #22c55e"></span>
+              <span class="w-2.5 h-2.5 rounded-sm" style="background:#0c4a6e;border:1px solid #22d3ee"></span>
+              <span class="w-2.5 h-2.5 rounded-sm" style="background:#7f1d1d;border:1px solid #ef4444"></span>
+            </span>
+            Krai colors &amp; labels
+          </label>
+          <span class="flex items-center gap-1.5 text-zinc-500" x-show="zkillLastFetch">
+            <span x-text="zkillStatusLabel"></span>
+          </span>
+          <button type="button" @click="toggleMapFullscreen()"
+            class="ml-auto px-3 py-1.5 rounded-lg border border-red-900/60 bg-black hover:bg-red-950/50 text-zinc-300 hover:text-red-400 transition-colors text-xs font-semibold">
+            <span x-text="isMapFullscreen ? '✕ Exit Fullscreen' : '⤢ Fullscreen'"></span>
+          </button>
+          <span class="text-zinc-500" x-show="!isMapFullscreen">Drag to pan &bull; Scroll to zoom</span>
+        </div>
+      </div>
+      <div id="mapFullscreenRoot"
+        class="relative rounded-xl border border-red-900/60 overflow-hidden map-stage"
+        :class="isMapFullscreen ? 'map-stage-fullscreen' : ''"
+        :style="isMapFullscreen ? 'height: 100vh;' : 'height: 680px;'">
+        <canvas id="mapCanvas" class="w-full h-full"></canvas>
+        <button type="button" x-show="isMapFullscreen" @click="toggleMapFullscreen()"
+          class="absolute top-3 right-3 z-10 px-3 py-1.5 rounded-lg border border-red-800 bg-black/90 hover:bg-red-950 text-zinc-200 text-xs font-semibold shadow-lg shadow-red-900/30">
+          ✕ Exit Fullscreen
+        </button>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="max-w-[90rem] mx-auto px-4 py-6 text-center text-xs text-zinc-600">
+    EVE Online Pochven Smart Mapper v2 &mdash; Kybernauts theme &mdash; Live countdown uses your system clock.
+  </footer>
+
+<script>
+function pochvenMapper() {
+  return {
+    rawText: '',
+    entries: [],
+    activeTab: 'table',
+    searchQuery: '',
+    sortField: 'origin',
+    sortDir: 'asc',
+    parseMessage: '',
+    parseError: false,
+    nextId: 1,
+    now: Date.now(),
+    countdownTimer: null,
+    zkillTimer: null,
+    esiStatus: 'unknown',
+    esiLatency: null,
+    zkillActivity: {},
+    zkillLoading: false,
+    zkillLastFetch: null,
+    zkillSource: null,
+    jitaJumpCache: {},
+    systemIdCache: {},
+    jitaRoutePending: {},
+    securityStatusCache: {},
+    securityPending: {},
+    isMapFullscreen: false,
+
+    mapOffset: { x: 0, y: 0 },
+    mapScale: 0.68,
+
+    filters: {
+      H: true, L: true, N: true, J: true, PP: true,
+      gates: true, pvp: true, krai: true,
+    },
+
+    // Absolute map center for viewport pan/zoom (biased south to keep South Dock in frame)
+    MAP_CENTER: { x: 500, y: 455 },
+    LEFT_DOCK_X: 35,
+    RIGHT_DOCK_X: 1070,
+    DOCK_TOP_Y: 110,
+    DOCK_ROW_H: 62,
+    // South dock sits well below base systems (BASE_Y=720); keep ≥78px clear to panel top
+    BOTTOM_DOCK_Y: 880,
+    BOTTOM_DOCK_GAP: 100,
+    SOUTH_DOCK_CLEARANCE: 78,
+    SOUTH_DOCK_PANEL_PAD: 52,
+    SOUTH_BASE_SYSTEMS: ['Vale', 'Ala', 'Wirashoda', 'Senda', 'Ahtila', 'Kuharah', 'Tunudan', 'Harva'],
+    SIG_LABEL_MAX_SLOTS: 16,
+    SIG_LABEL_PAD: 4,
+    SIG_FONT_SIZES: [10, 9, 8, 7],
+    JITA_SYSTEM_ID: 30000142,
+    PP_MAX_AGE_MS: 4 * 3600 * 1000,
+    PVP_FLASH_THRESHOLD: 8,
+    ESI_PVP_REFRESH_MS: 15 * 60 * 1000,
+
+    WORMHOLE_REGEX: /^(H|J|P|PP|P2P)-([A-Z]{3})-([A-Za-z0-9][A-Za-z0-9\s.'-]*)/i,
+
+    POCHVEN_SYSTEM_IDS: {
+      Ahtila: 30045328, Ala: 30002652, Angymonne: 30003046, Archee: 30002702,
+      Arvasaras: 30001381, Harva: 30002225, Ichoriya: 30045329, Ignebaener: 30005005,
+      Kaunokka: 30002797, Kino: 30001372, Komo: 30031392, Konola: 30002737,
+      Krirald: 30002079, Kuharah: 30000021, Nalvula: 30001445, Nani: 30001413,
+      Niarja: 30003504, Otanuomi: 30000192, Otela: 30000157, Raravoss: 30003495,
+      Sakenta: 30010141, Senda: 30020141, Skarkon: 30002411, Tunudan: 30002770,
+      Urhinichi: 30040141, Vale: 30005029, Wirashoda: 30000206,
+    },
+
+    ESI_STATUS_URL: 'https://esi.evetech.net/latest/status/',
+    ESI_SYSTEM_KILLS_URL: 'https://esi.evetech.net/latest/universe/system_kills/',
+    ESI_UNIVERSE_IDS_URL: 'https://esi.evetech.net/latest/universe/ids/',
+    ESI_SYSTEMS_URL: 'https://esi.evetech.net/latest/universe/systems',
+    ESI_ROUTE_URL: 'https://esi.evetech.net/latest/route',
+    MASS_REGEX: /([<>])\s*50\s*%/i,
+    LIFETIME_TAG_REGEX: /(?:<\s*(\d+)\s*([DH])\b|>\s*(\d+)\s*([DH])\b)/i,
+    EOL_REGEX: /\bEOL\b/i,
+    DATE_REGEX: /(\d{4}[.\-/]\d{2}[.\-/]\d{2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)/,
+    IRRELEVANT_NAMES: /^(?:Safe|instadock|Cargo\s*Container|OBS\s*\d+|Station|Citadel|Athanor|Azbel|Raitaru|Sotiyo|Tatara|Keepstar|Fortizar|Astrahus|POS|Bookmark|Clone|DScan|Tactical|Midpoint|Gate|Dock|Home)$/i,
+
+    // EVE clipboard TSV column indexes (tab-separated location export)
+    COL: { NAME: 0, TYPE: 1, ROUTE: 2, ORIGIN: 3, CONST: 4, REGION: 5, SCANNED: 6, EXPIRY: 7, AUTHOR: 8 },
+
+    init() {
+      this.countdownTimer = setInterval(() => {
+        this.now = Date.now();
+        if (this.activeTab === 'map') this.drawMap();
+      }, 1000);
+      window.addEventListener('resize', () => { if (this.activeTab === 'map') this.drawMap(); });
+      const onFsChange = () => this.handleMapFullscreenChange();
+      document.addEventListener('fullscreenchange', onFsChange);
+      document.addEventListener('webkitfullscreenchange', onFsChange);
+      this.$nextTick(() => {
+        if (this.activeTab === 'map') this.drawMap();
+        this.testEsiConnection();
+        this.fetchZkillActivity();
+      });
+      this.zkillTimer = setInterval(() => this.fetchZkillActivity(), this.ESI_PVP_REFRESH_MS);
+    },
+
+    getMapFullscreenElement() {
+      return document.getElementById('mapFullscreenRoot');
+    },
+
+    syncMapFullscreenState() {
+      const el = this.getMapFullscreenElement();
+      const active = document.fullscreenElement || document.webkitFullscreenElement || null;
+      this.isMapFullscreen = !!(el && active === el);
+    },
+
+    handleMapFullscreenChange() {
+      this.syncMapFullscreenState();
+      this.$nextTick(() => {
+        if (this.activeTab === 'map') this.drawMap();
+      });
+    },
+
+    async toggleMapFullscreen() {
+      const el = this.getMapFullscreenElement();
+      if (!el) return;
+      try {
+        const active = document.fullscreenElement || document.webkitFullscreenElement || null;
+        if (active === el) {
+          if (document.exitFullscreen) await document.exitFullscreen();
+          else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+        } else if (!active) {
+          if (el.requestFullscreen) await el.requestFullscreen();
+          else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+        }
+      } catch {
+        // Browser blocked fullscreen or API unavailable — keep current view
+      }
+      this.syncMapFullscreenState();
+      this.$nextTick(() => {
+        if (this.activeTab === 'map') this.drawMap();
+      });
+    },
+
+    get esiStatusLabel() {
+      if (this.esiStatus === 'checking') return 'ESI Checking…';
+      if (this.esiStatus === 'online') return 'ESI Online';
+      if (this.esiStatus === 'offline') return 'ESI Offline';
+      return 'ESI Unknown';
+    },
+
+    get zkillStatusLabel() {
+      if (this.zkillLoading) return 'Refreshing PvP data…';
+      if (!this.zkillLastFetch || !Number.isFinite(this.zkillLastFetch)) return '';
+      const mins = Math.max(0, Math.floor((this.now - this.zkillLastFetch) / 60000));
+      return `ESI kills · ${mins}m ago`;
+    },
+
+    async testEsiConnection() {
+      this.esiStatus = 'checking';
+      const start = performance.now();
+      try {
+        const res = await fetch(this.ESI_STATUS_URL, { method: 'GET', cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await res.json();
+        this.esiLatency = Math.round(performance.now() - start);
+        this.esiStatus = 'online';
+      } catch {
+        this.esiLatency = null;
+        this.esiStatus = 'offline';
+      }
+    },
+
+    async fetchEsiSystemKills() {
+      const res = await fetch(this.ESI_SYSTEM_KILLS_URL, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`ESI kills HTTP ${res.status}`);
+      const data = await res.json();
+      const idToName = {};
+      for (const [name, id] of Object.entries(this.POCHVEN_SYSTEM_IDS)) {
+        idToName[id] = name;
+      }
+      const activity = {};
+      for (const row of data) {
+        const name = idToName[row.system_id];
+        if (!name) continue;
+        activity[this.normSystem(name)] = (row.ship_kills || 0) + (row.pod_kills || 0);
+      }
+      return activity;
+    },
+
+    async fetchZkillActivity() {
+      if (this.zkillLoading) return;
+      this.zkillLoading = true;
+      try {
+        this.zkillActivity = await this.fetchEsiSystemKills();
+        this.zkillSource = 'esi';
+        this.zkillLastFetch = Date.now();
+      } catch {
+        this.zkillActivity = {};
+        this.zkillSource = null;
+      } finally {
+        this.zkillLoading = false;
+      }
+      if (this.activeTab === 'map') this.drawMap();
+    },
+
+    getSystemKillCount(name) {
+      return this.zkillActivity[this.normSystem(name)] || 0;
+    },
+
+    normalizeWormholeType(typeCode) {
+      const t = (typeCode || '').toUpperCase();
+      if (t === 'P2P') return 'PP';
+      return t;
+    },
+
+    isPpBookmark(entry) {
+      return this.normalizeWormholeType(entry?.type) === 'PP';
+    },
+
+    ppAbsoluteExpiryMs(entry) {
+      if (!this.isPpBookmark(entry) || !entry.scannedTimeMs) return null;
+      return entry.scannedTimeMs + this.PP_MAX_AGE_MS;
+    },
+
+    isEntryExpired(entry) {
+      if (!entry) return false;
+      if (this.isPpBookmark(entry)) {
+        const abs = this.ppAbsoluteExpiryMs(entry);
+        if (abs != null && this.now >= abs) return true;
+      }
+      if (entry.trackCountdown && entry.expiryTimeMs && entry.expiryTimeMs < this.now) return true;
+      return false;
+    },
+
+    getCachedJitaJumps(systemName) {
+      const key = this.normSystem(systemName);
+      if (key === 'jita') return 0;
+      return Object.prototype.hasOwnProperty.call(this.jitaJumpCache, key)
+        ? this.jitaJumpCache[key]
+        : null;
+    },
+
+    async resolveSystemId(systemName) {
+      const key = this.normSystem(systemName);
+      if (!key || key === 'unknown') return null;
+      if (Object.prototype.hasOwnProperty.call(this.systemIdCache, key)) {
+        return this.systemIdCache[key];
+      }
+      for (const [name, id] of Object.entries(this.POCHVEN_SYSTEM_IDS)) {
+        if (this.normSystem(name) === key) {
+          this.systemIdCache[key] = id;
+          return id;
+        }
+      }
+      try {
+        const res = await fetch(this.ESI_UNIVERSE_IDS_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify([systemName]),
+          cache: 'no-store',
+        });
+        if (!res.ok) throw new Error(`ESI ids HTTP ${res.status}`);
+        const data = await res.json();
+        const systems = data.systems || [];
+        const match = systems.find(s => this.normSystem(s.name) === key) || systems[0];
+        const id = match?.id ?? null;
+        this.systemIdCache[key] = id;
+        return id;
+      } catch {
+        this.systemIdCache[key] = null;
+        return null;
+      }
+    },
+
+    classifySecurityStatus(securityStatus) {
+      const s = Number(securityStatus);
+      if (!Number.isFinite(s)) return null;
+      if (s >= 0.5) return 'H';
+      if (s > 0.0) return 'L';
+      return 'N';
+    },
+
+    getCachedSecurityType(systemName) {
+      const key = this.normSystem(systemName);
+      if (!key || key === 'unknown') return null;
+      if (!Object.prototype.hasOwnProperty.call(this.securityStatusCache, key)) return null;
+      return this.securityStatusCache[key];
+    },
+
+    async fetchSystemSecurityType(systemName) {
+      const key = this.normSystem(systemName);
+      if (!key || key === 'unknown') return null;
+      if (Object.prototype.hasOwnProperty.call(this.securityStatusCache, key)) {
+        return this.securityStatusCache[key];
+      }
+      if (this.securityPending[key]) return this.securityPending[key];
+
+      this.securityPending[key] = (async () => {
+        try {
+          // Pochven systems are never external docks — skip network
+          if (this.findPochvenSystem(systemName)) {
+            this.securityStatusCache[key] = null;
+            return null;
+          }
+          const systemId = await this.resolveSystemId(systemName);
+          if (!systemId) {
+            this.securityStatusCache[key] = null;
+            return null;
+          }
+          const res = await fetch(`${this.ESI_SYSTEMS_URL}/${systemId}/`, { cache: 'no-store' });
+          if (!res.ok) throw new Error(`ESI system HTTP ${res.status}`);
+          const data = await res.json();
+          const secType = this.classifySecurityStatus(data.security_status);
+          this.securityStatusCache[key] = secType;
+          return secType;
+        } catch {
+          this.securityStatusCache[key] = null;
+          return null;
+        } finally {
+          delete this.securityPending[key];
+        }
+      })();
+
+      return this.securityPending[key];
+    },
+
+    // ESI security is authoritative for external docks; never label them Pochven (P)
+    resolveExternalDockType(systemName, bookmarkType) {
+      const bt = this.normalizeWormholeType(bookmarkType);
+      const esiType = this.getCachedSecurityType(systemName);
+
+      if (esiType) {
+        // Keep explicit J-space bookmark type (WH systems report negative sec → would look like Null)
+        if (bt === 'J') return 'J';
+        return esiType;
+      }
+
+      if (bt === 'P' || bt === 'PP') return null;
+      if (bt === 'H' || bt === 'L' || bt === 'N' || bt === 'J') return bt;
+      return null;
+    },
+
+    collectExternalSystemNames(links) {
+      const names = new Set();
+      for (const link of links) {
+        if (link.expired) continue;
+        const fromIsP = !!this.findPochvenSystem(link.from);
+        const toIsP = !!this.findPochvenSystem(link.to);
+        if (fromIsP && toIsP) continue;
+        const extName = !fromIsP ? link.from : link.to;
+        if (!extName || this.normSystem(extName) === 'unknown') continue;
+        if (this.findPochvenSystem(extName)) continue;
+        names.add(extName);
+      }
+      return [...names];
+    },
+
+    async ensureExternalSecurityClassification(links) {
+      const names = this.collectExternalSystemNames(links).filter(n => {
+        const key = this.normSystem(n);
+        if (Object.prototype.hasOwnProperty.call(this.securityStatusCache, key)) return false;
+        if (this.securityPending[key]) return false;
+        return true;
+      });
+      if (!names.length) return false;
+      await Promise.all(names.map(n => this.fetchSystemSecurityType(n)));
+      return true;
+    },
+
+    async fetchJitaJumpCount(systemName) {
+      const key = this.normSystem(systemName);
+      if (!key || key === 'unknown') return null;
+      if (Object.prototype.hasOwnProperty.call(this.jitaJumpCache, key)) {
+        return this.jitaJumpCache[key];
+      }
+      if (this.jitaRoutePending[key]) return this.jitaRoutePending[key];
+
+      this.jitaRoutePending[key] = (async () => {
+        try {
+          const originId = await this.resolveSystemId(systemName);
+          if (!originId) {
+            this.jitaJumpCache[key] = null;
+            return null;
+          }
+          if (originId === this.JITA_SYSTEM_ID) {
+            this.jitaJumpCache[key] = 0;
+            return 0;
+          }
+          const url = `${this.ESI_ROUTE_URL}/${originId}/${this.JITA_SYSTEM_ID}/`;
+          const res = await fetch(url, { cache: 'no-store' });
+          if (!res.ok) throw new Error(`ESI route HTTP ${res.status}`);
+          const route = await res.json();
+          const jumps = Array.isArray(route) ? Math.max(0, route.length - 1) : null;
+          this.jitaJumpCache[key] = jumps;
+          return jumps;
+        } catch {
+          this.jitaJumpCache[key] = null;
+          return null;
+        } finally {
+          delete this.jitaRoutePending[key];
+        }
+      })();
+
+      return this.jitaRoutePending[key];
+    },
+
+    async ensureJitaRoutesForHighsec(links) {
+      const names = new Set();
+      for (const link of links) {
+        if (link.expired) continue;
+        const fromIsP = !!this.findPochvenSystem(link.from);
+        const toIsP = !!this.findPochvenSystem(link.to);
+        if (fromIsP && toIsP) continue;
+        const extName = !fromIsP ? link.from : link.to;
+        if (!extName || this.normSystem(extName) === 'unknown') continue;
+        const bookmarkType = link.forward?.type || link.reverse?.type;
+        const dockType = this.resolveExternalDockType(extName, bookmarkType);
+        if (dockType !== 'H') continue;
+        const key = this.normSystem(extName);
+        if (Object.prototype.hasOwnProperty.call(this.jitaJumpCache, key)) continue;
+        if (this.jitaRoutePending[key]) continue;
+        names.add(extName);
+      }
+      if (!names.size) return false;
+      await Promise.all([...names].map(n => this.fetchJitaJumpCount(n)));
+      return true;
+    },
+
+    // Fixed Pochven triangle layout
+    KRAI_NODE_STYLE: {
+      veles:  { fill: '#14532d', border: '#22c55e', text: '#bbf7d0' },
+      perun:  { fill: '#0c4a6e', border: '#22d3ee', text: '#cffafe' },
+      svarog: { fill: '#7f1d1d', border: '#ef4444', text: '#fecaca' },
+    },
+
+    KRAI_MAP: {
+      Kino: 'perun', Ignebaener: 'perun', Komo: 'perun', Konola: 'perun', Krirald: 'perun',
+      Nalvula: 'perun', Otela: 'perun', Sakenta: 'perun', Arvasaras: 'perun', Otanuomi: 'perun',
+      Niarja: 'svarog', Harva: 'svarog', Kuharah: 'svarog', Nani: 'svarog', Raravoss: 'svarog',
+      Skarkon: 'svarog', Tunudan: 'svarog', Ahtila: 'svarog', Urhinichi: 'svarog',
+      Archee: 'veles', Ala: 'veles', Angymonne: 'veles', Ichoriya: 'veles', Kaunokka: 'veles',
+      Vale: 'veles', Wirashoda: 'veles', Senda: 'veles',
+    },
+
+  // Secondary Krai for shared border systems (split-border indicator)
+    KRAI_OVERLAP: { Arvasaras: 'veles', Otanuomi: 'svarog', Ahtila: 'veles' },
+
+    KRAI_HOME: { Kino: 'perun', Niarja: 'svarog', Archee: 'veles' },
+
+  // Upright equilateral triangle — Kino apex, Archee left base, Niarja right base
+    buildKinoApexTriangleCoords() {
+      const APEX_X = 500, APEX_Y = 80;
+      const LEFT_X = 100, RIGHT_X = 910, BASE_Y = 720;
+
+      const leftSlope = ['Otela', 'Ignebaener', 'Komo', 'Sakenta', 'Arvasaras', 'Kaunokka', 'Ichoriya', 'Angymonne'];
+      const rightSlope = ['Nalvula', 'Konola', 'Krirald', 'Otanuomi', 'Urhinichi', 'Nani', 'Skarkon', 'Raravoss'];
+      const baseLine = ['Vale', 'Ala', 'Wirashoda', 'Senda', 'Ahtila', 'Kuharah', 'Tunudan', 'Harva'];
+
+      const coords = {
+        Kino: [APEX_X, APEX_Y],
+        Archee: [LEFT_X, BASE_Y],
+        Niarja: [RIGHT_X, BASE_Y],
+      };
+
+      const placeEdge = (names, x1, y1, x2, y2) => {
+        names.forEach((name, i) => {
+          const t = (i + 1) / (names.length + 1);
+          coords[name] = [x1 + t * (x2 - x1), y1 + t * (y2 - y1)];
+        });
+      };
+
+      placeEdge(leftSlope, APEX_X, APEX_Y, LEFT_X, BASE_Y);
+      placeEdge(rightSlope, APEX_X, APEX_Y, RIGHT_X, BASE_Y);
+      placeEdge(baseLine, LEFT_X, BASE_Y, RIGHT_X, BASE_Y);
+
+      const triangle = {
+        apex: { x: APEX_X, y: APEX_Y },
+        left: { x: LEFT_X, y: BASE_Y },
+        right: { x: RIGHT_X, y: BASE_Y },
+      };
+      return { coords, triangle };
+    },
+
+    getPochvenLayout() {
+      const { coords, triangle } = this.buildKinoApexTriangleCoords();
+
+      const systems = {};
+      for (const [name, [x, y]] of Object.entries(coords)) {
+        systems[name] = { name, x, y, krai: this.KRAI_MAP[name] || 'veles' };
+      }
+
+      const allPts = Object.values(systems);
+      const mapCenter = {
+        x: (triangle.apex.x + triangle.left.x + triangle.right.x) / 3,
+        y: (triangle.apex.y + triangle.left.y + triangle.right.y) / 3,
+      };
+
+      const xs = allPts.map(s => s.x);
+      const ys = allPts.map(s => s.y);
+
+      const baseLine = ['Vale', 'Ala', 'Wirashoda', 'Senda', 'Ahtila', 'Kuharah', 'Tunudan', 'Harva'];
+      const gates = [
+        ['Kino', 'Otela'], ['Kino', 'Nalvula'],
+        ['Otela', 'Ignebaener'], ['Ignebaener', 'Komo'], ['Komo', 'Sakenta'], ['Sakenta', 'Arvasaras'],
+        ['Arvasaras', 'Kaunokka'], ['Kaunokka', 'Ichoriya'], ['Ichoriya', 'Angymonne'], ['Angymonne', 'Archee'],
+        ['Nalvula', 'Konola'], ['Konola', 'Krirald'], ['Krirald', 'Otanuomi'], ['Otanuomi', 'Urhinichi'],
+        ['Urhinichi', 'Nani'], ['Nani', 'Skarkon'], ['Skarkon', 'Raravoss'], ['Raravoss', 'Niarja'],
+        ['Archee', 'Angymonne'], ['Vale', 'Angymonne'],
+        ['Archee', baseLine[0]],
+        ...baseLine.slice(1).map((n, i) => [baseLine[i], n]),
+        [baseLine[baseLine.length - 1], 'Niarja'],
+        ['Harva', 'Raravoss'],
+        ['Otela', 'Nalvula'],
+      ];
+
+      const regionLabels = this.computeRegionLabels(systems, mapCenter);
+      const bounds = {
+        minX: Math.min(...xs), maxX: Math.max(...xs),
+        minY: Math.min(...ys), maxY: Math.max(...ys),
+      };
+      return { systems, gates, mapCenter, regionLabels, bounds, triangle };
+    },
+
+    computeRegionLabels(systems, mapCenter) {
+      const centroid = (names) => {
+        const pts = names.map(n => systems[n]).filter(Boolean);
+        if (!pts.length) return mapCenter;
+        return {
+          x: pts.reduce((s, p) => s + p.x, 0) / pts.length,
+          y: pts.reduce((s, p) => s + p.y, 0) / pts.length,
+        };
+      };
+      return {
+        pochven: { ...mapCenter, label: 'Pochven Region' },
+        veles:  { ...centroid(['Archee','Ala','Wirashoda','Senda','Vale','Angymonne','Ichoriya','Kaunokka','Arvasaras']), label: 'Krai Veles' },
+        perun:  { ...centroid(['Sakenta','Komo','Ignebaener','Otela','Nalvula','Konola','Krirald','Otanuomi','Kino']), label: 'Krai Perun' },
+        svarog: { ...centroid(['Ahtila','Kuharah','Tunudan','Harva','Niarja','Raravoss','Skarkon','Nani','Urhinichi']), label: 'Krai Svarog' },
+      };
+    },
+
+    drawRegionLabels(ctx, regionLabels) {
+      const styles = {
+        pochven: { color: 'rgba(161, 161, 170, 0.45)', font: 'bold 13px sans-serif' },
+        veles:   { color: 'rgba(34, 197, 94, 0.45)',  font: 'bold 11px sans-serif' },
+        perun:   { color: 'rgba(34, 211, 238, 0.45)',  font: 'bold 11px sans-serif' },
+        svarog:  { color: 'rgba(239, 68, 68, 0.5)',    font: 'bold 11px sans-serif' },
+      };
+      for (const key of ['veles', 'perun', 'svarog', 'pochven']) {
+        const r = regionLabels[key];
+        if (!r) continue;
+        const st = styles[key];
+        ctx.font = st.font;
+        ctx.fillStyle = st.color;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(r.label, r.x, r.y);
+      }
+    },
+
+    findPochvenSystem(name) {
+      const n = this.normSystem(name);
+      const { systems } = this.getPochvenLayout();
+      return Object.values(systems).find(s => this.normSystem(s.name) === n) || null;
+    },
+
+    normSystem(name) {
+      return (name || '').toLowerCase().trim().replace(/\s+/g, ' ');
+    },
+
+    parseEveDate(str) {
+      if (!str) return null;
+      const m = str.match(/(\d{4})[.\-/](\d{2})[.\-/](\d{2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+      if (!m) return null;
+      const d = new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
+      return isNaN(d.getTime()) ? null : d;
+    },
+
+    formatDate(d) {
+      if (!d) return null;
+      const pad = n => String(n).padStart(2, '0');
+      return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    },
+
+    col(parts, index) {
+      return (parts[index] || '').trim();
+    },
+
+    hasLifetimeTag(text) {
+      return this.EOL_REGEX.test(text) || this.LIFETIME_TAG_REGEX.test(text);
+    },
+
+    parseLifetimeTag(text) {
+      if (this.EOL_REGEX.test(text)) return 'EOL';
+      const lt = text.match(/<\s*(\d+)\s*([DH])\b/i);
+      if (lt) return `< ${lt[1]} ${lt[2].toUpperCase() === 'D' ? 'day(s)' : 'hour(s)'}`;
+      const gt = text.match(/>\s*(\d+)\s*([DH])\b/i);
+      if (gt) return `> ${gt[1]} ${gt[2].toUpperCase() === 'D' ? 'day(s)' : 'hour(s)'}`;
+      return null;
+    },
+
+    stripNameTags(text) {
+      return text
+        .replace(this.MASS_REGEX, '')
+        .replace(/<\s*\d+\s*[DH]\b/gi, '')
+        .replace(/>\s*\d+\s*[DH]\b/gi, '')
+        .replace(this.EOL_REGEX, '')
+        .replace(/[<>]\s*\d+\s*%/gi, '')
+        .trim();
+    },
+
+    INVALID_ORIGIN: /^(coordinate|coordinates|unknown|no gate(?:-to-gate route)?|solar system|item type|region|constellation|\d+)$/i,
+
+    isValidOrigin(val) {
+      if (!val) return false;
+      if (this.INVALID_ORIGIN.test(val)) return false;
+      if (this.WORMHOLE_REGEX.test(val)) return false;
+      if (this.DATE_REGEX.test(val)) return false;
+      return val.length > 1 && val.length < 40;
+    },
+
+    isNoExpiryValue(raw) {
+      const v = (raw || '').trim();
+      return v === '' || v === '-' || v === '—' || /^n\/?a$/i.test(v);
+    },
+
+  // ─── Parsing ────────────────────────────────────────────────────
+
+    parseRawText() {
+      this.parseMessage = '';
+      this.parseError = false;
+      if (!this.rawText.trim()) { this.parseMessage = 'No text to parse.'; this.parseError = true; return; }
+
+      const lines = this.rawText.split(/\r?\n/);
+      let added = 0, skipped = 0;
+      const existingKeys = new Set(this.entries.map(e => `${this.normSystem(e.origin)}|${e.sig}|${this.normSystem(e.destination)}`));
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (this.isFolderOrIrrelevant(trimmed)) { skipped++; continue; }
+        const parsed = this.parseWormholeLine(trimmed);
+        if (!parsed) { skipped++; continue; }
+        const key = `${this.normSystem(parsed.origin)}|${parsed.sig}|${this.normSystem(parsed.destination)}`;
+        if (existingKeys.has(key)) { skipped++; continue; }
+        existingKeys.add(key);
+        parsed.id = this.nextId++;
+        this.entries.push(parsed);
+        added++;
+      }
+
+      this.linkBidirectionalRoutes();
+      const linked = this.entries.filter(e => e.routeStatus === 'two-way').length / 2;
+      this.parseMessage = `Import complete: ${added} added, ${skipped} skipped. ${linked} bidirectional pair(s) detected.`;
+      this.parseError = added === 0;
+      this.ensureExternalSecurityClassification(this.buildBookmarkLinks()).then(changed => {
+        if (changed) {
+          this.ensureJitaRoutesForHighsec(this.buildBookmarkLinks()).then(jitaChanged => {
+            if ((changed || jitaChanged) && this.activeTab === 'map') this.drawMap();
+          });
+        }
+      });
+      if (this.activeTab === 'map') this.$nextTick(() => this.drawMap());
+    },
+
+    isFolderOrIrrelevant(line) {
+      if (/^(?:Personal|Corporation|Alliance|Shared)\s+(?:Locations?|Bookmarks?)\s*\[\d+\]/i.test(line)) return true;
+      if (/^Locations?\s+in\s+/i.test(line)) return true;
+      if (/^\[.+\]$/.test(line)) return true;
+
+      const firstField = (line.split('\t')[0] || line).trim();
+      if (this.IRRELEVANT_NAMES.test(firstField)) return true;
+
+      if (!this.WORMHOLE_REGEX.test(firstField) && !/(H|J|P|PP)-[A-Z]{3}-/i.test(line)) return true;
+      return false;
+    },
+
+    parseWormholeLine(line) {
+      const isTabDelimited = line.includes('\t');
+      let parts;
+      if (isTabDelimited) {
+        // Preserve column indexes — do NOT filter empty cells
+        parts = line.split('\t').map(p => p.trim());
+      } else {
+        parts = line.split(/\s{2,}/).map(p => p.trim()).filter(Boolean);
+      }
+
+      const nameField = this.col(parts, 0) || line;
+      const whMatch = nameField.match(this.WORMHOLE_REGEX) || line.match(/(H|J|P|PP|P2P)-([A-Z]{3})-([A-Za-z0-9][A-Za-z0-9\s.'-]*)/i);
+      if (!whMatch) return null;
+      return this.buildEntry(whMatch, parts, line, nameField, isTabDelimited);
+    },
+
+    buildEntry(match, parts, fullLine, nameField, isTabDelimited = false) {
+      const typeCode = this.normalizeWormholeType(match[1]);
+      const sig = match[2].toUpperCase();
+      let destination = this.stripNameTags(match[3].trim());
+
+      const C = this.COL;
+      let origin = 'Unknown';
+      let author = '—';
+      let scannedDate = null;
+      let expiryDate = null;
+      let expiryRaw = '';
+      let noExpiry = false;
+
+      if (isTabDelimited) {
+        // EVE clipboard: Index 3 = Origin System (never Index 1 "Coordinate")
+        const originVal = this.col(parts, C.ORIGIN);
+        if (this.isValidOrigin(originVal)) origin = originVal;
+
+        const scannedRaw = this.col(parts, C.SCANNED);
+        if (scannedRaw && this.DATE_REGEX.test(scannedRaw)) {
+          scannedDate = this.parseEveDate(scannedRaw.match(this.DATE_REGEX)[1]);
+        }
+
+        expiryRaw = this.col(parts, C.EXPIRY);
+        if (this.isNoExpiryValue(expiryRaw)) {
+          noExpiry = true;
+        } else if (this.DATE_REGEX.test(expiryRaw)) {
+          expiryDate = this.parseEveDate(expiryRaw.match(this.DATE_REGEX)[1]);
+        }
+
+        const authorVal = this.col(parts, C.AUTHOR);
+        if (authorVal) author = authorVal;
+      } else {
+        // Fallback for non-tab pasted lines
+        for (let i = 1; i < parts.length; i++) {
+          const p = parts[i];
+          if (p && !this.WORMHOLE_REGEX.test(p) && !/^\d+(\.\d+)?$/.test(p) && !this.DATE_REGEX.test(p) && p.length > 1 && p.length < 40) {
+            origin = p;
+            break;
+          }
+        }
+        const dateFields = [];
+        parts.forEach((p) => {
+          const dm = p.match(this.DATE_REGEX);
+          if (dm) dateFields.push(this.parseEveDate(dm[1]));
+        });
+        if (dateFields.length >= 2) {
+          scannedDate = dateFields[dateFields.length - 2];
+          expiryDate = dateFields[dateFields.length - 1];
+        } else if (dateFields.length === 1) {
+          expiryDate = dateFields[0];
+        }
+        for (let i = parts.length - 1; i >= 2; i--) {
+          const p = parts[i];
+          if (p && !this.DATE_REGEX.test(p) && !/^\d+(\.\d+)?$/.test(p) && p.length < 30) { author = p; break; }
+        }
+      }
+
+      const massMatch = (nameField + ' ' + fullLine).match(this.MASS_REGEX);
+      const mass = massMatch ? (massMatch[1] === '>' ? '>50% remaining' : '<50% remaining') : 'Unknown remaining mass';
+
+      const lifetimeTag = this.parseLifetimeTag(nameField);
+      const hasLifetimeTag = this.hasLifetimeTag(nameField);
+      const eol = this.EOL_REGEX.test(nameField);
+
+      // Only track expiry/countdown when lifetime tag OR valid Index 7 timestamp present
+      // PP/P2P also track a hard 4h absolute lifetime from scanned time
+      const hasValidExpiryDate = !noExpiry && expiryDate !== null;
+      const trackCountdown = hasLifetimeTag || hasValidExpiryDate;
+      const isPp = typeCode === 'PP';
+      let effectiveExpiryMs = (trackCountdown && hasValidExpiryDate) ? expiryDate.getTime() : null;
+      if (isPp && scannedDate) {
+        const ppCap = scannedDate.getTime() + this.PP_MAX_AGE_MS;
+        effectiveExpiryMs = effectiveExpiryMs == null ? ppCap : Math.min(effectiveExpiryMs, ppCap);
+      }
+      const trackCountdownFinal = trackCountdown || (isPp && scannedDate != null);
+
+      let expiryDisplay;
+      if (noExpiry && !isPp) {
+        expiryDisplay = 'Permanent / No Expiry';
+      } else if (!trackCountdownFinal) {
+        expiryDisplay = '—';
+      } else if (effectiveExpiryMs != null) {
+        expiryDisplay = this.formatDate(new Date(effectiveExpiryMs));
+      } else {
+        expiryDisplay = '—';
+      }
+
+      const typeLabels = { H: 'Highsec', P: 'Pochven', J: 'Wormhole', PP: 'P-P Internal' };
+
+      return {
+        type: typeCode,
+        typeLabel: `${typeCode} (${typeLabels[typeCode] || typeCode})`,
+        sig, destination, origin, mass,
+        lifetimeTag,
+        hasLifetimeTag,
+        eol,
+        noExpiry: noExpiry && !isPp,
+        trackCountdown: trackCountdownFinal,
+        author,
+        scannedTime: scannedDate ? this.formatDate(scannedDate) : '—',
+        scannedTimeMs: scannedDate ? scannedDate.getTime() : null,
+        expiryTime: expiryDisplay,
+        expiryTimeMs: effectiveExpiryMs,
+        routeStatus: 'one-way',
+        linkedId: null,
+        returnSig: null,
+        returnType: null,
+        raw: nameField
+      };
+    },
+
+    // ─── Bidirectional Linking ─────────────────────────────────────
+
+    linkBidirectionalRoutes() {
+      for (const e of this.entries) {
+        e.routeStatus = 'one-way';
+        e.linkedId = null;
+        e.returnSig = null;
+        e.returnType = null;
+      }
+
+      for (let i = 0; i < this.entries.length; i++) {
+        for (let j = i + 1; j < this.entries.length; j++) {
+          const a = this.entries[i], b = this.entries[j];
+          const isPair =
+            this.normSystem(a.origin) === this.normSystem(b.destination) &&
+            this.normSystem(a.destination) === this.normSystem(b.origin);
+          if (!isPair) continue;
+
+          a.routeStatus = 'two-way';
+          b.routeStatus = 'two-way';
+          a.linkedId = b.id;
+          b.linkedId = a.id;
+          a.returnSig = b.sig;
+          b.returnSig = a.sig;
+          a.returnType = b.type;
+          b.returnType = a.type;
+        }
+      }
+    },
+
+    get twoWayCount() { return this.entries.filter(e => e.routeStatus === 'two-way').length; },
+    get oneWayCount() { return this.entries.filter(e => e.routeStatus === 'one-way').length; },
+
+    // ─── Countdown & Status ────────────────────────────────────────
+
+    entryStatus(entry) {
+      if (this.isEntryExpired(entry)) return { status: 'expired' };
+      if (!entry.trackCountdown) return { status: 'unknown' };
+      if (entry.eol && entry.hasLifetimeTag) return { status: 'eol' };
+      if (!entry.expiryTimeMs) {
+        if (entry.hasLifetimeTag) return { status: 'eol' };
+        return { status: 'unknown' };
+      }
+      const diff = entry.expiryTimeMs - this.now;
+      if (diff <= 0) return { status: 'expired' };
+      if (diff < 3600000) return { status: 'critical' };
+      if (diff < 14400000) return { status: 'warning' };
+      return { status: 'ok' };
+    },
+
+    countdownText(entry) {
+      if (this.isEntryExpired(entry)) return 'EXPIRED';
+      if (!entry.trackCountdown) {
+        return entry.noExpiry ? 'Permanent / No Expiry' : 'Unknown remaining time';
+      }
+      if (entry.expiryTimeMs) {
+        const diff = entry.expiryTimeMs - this.now;
+        if (diff <= 0) return 'EXPIRED';
+        const h = Math.floor(diff / 3600000);
+        const m = Math.floor((diff % 3600000) / 60000);
+        const s = Math.floor((diff % 60000) / 1000);
+        if (h >= 24) {
+          const d = Math.floor(h / 24);
+          return `${d}d ${h % 24}h ${m}m`;
+        }
+        if (h > 0) return `${h}h ${m}m ${s}s`;
+        return `${m}m ${s}s`;
+      }
+      if (entry.hasLifetimeTag && entry.lifetimeTag) return entry.lifetimeTag;
+      if (entry.noExpiry) return 'Permanent / No Expiry';
+      return 'Unknown remaining time';
+    },
+
+    countdownClass(entry) {
+      if (!entry.trackCountdown) return 'text-zinc-500';
+      const st = this.entryStatus(entry).status;
+      if (st === 'expired' || st === 'critical') return 'text-red-400 font-bold pulse-critical';
+      if (st === 'eol' || st === 'warning') return 'text-orange-400 font-semibold';
+      if (st === 'unknown') return 'text-zinc-500';
+      return 'text-emerald-400';
+    },
+
+    expiryClass(entry) {
+      if (!entry.trackCountdown) return 'text-zinc-500';
+      if (entry.noExpiry) return 'text-zinc-500 italic';
+      const st = this.entryStatus(entry).status;
+      if (st === 'expired') return 'text-red-400 font-bold';
+      if (st === 'critical') return 'text-red-400';
+      if (st === 'eol' || st === 'warning') return 'text-orange-400';
+      return 'text-zinc-400';
+    },
+
+    // ─── Table ─────────────────────────────────────────────────────
+
+    get filteredEntries() {
+      let list = [...this.entries];
+      const q = this.searchQuery.toLowerCase().trim();
+      if (q) {
+        list = list.filter(e =>
+          [e.origin, e.sig, e.destination, e.type, e.mass, e.author, e.scannedTime, e.expiryTime,
+           e.typeLabel, e.routeStatus, e.returnSig, e.returnType]
+            .some(v => String(v || '').toLowerCase().includes(q))
+        );
+      }
+      const field = this.sortField;
+      const dir = this.sortDir === 'asc' ? 1 : -1;
+      list.sort((a, b) => {
+        let av = a[field], bv = b[field];
+        if (field === 'expiryTime' || field === 'scannedTime') {
+          av = a[field.replace('Time', 'TimeMs')] || 0;
+          bv = b[field.replace('Time', 'TimeMs')] || 0;
+          return (av - bv) * dir;
+        }
+        av = String(av || '').toLowerCase();
+        bv = String(bv || '').toLowerCase();
+        if (av < bv) return -1 * dir;
+        if (av > bv) return 1 * dir;
+        return 0;
+      });
+      return list;
+    },
+
+    sortBy(field) {
+      if (this.sortField === field) this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';
+      else { this.sortField = field; this.sortDir = 'asc'; }
+    },
+
+    sortIcon(field) {
+      return this.sortField !== field ? '' : (this.sortDir === 'asc' ? '▲' : '▼');
+    },
+
+    typeBadgeClass(type) {
+      return {
+        H: 'bg-emerald-900/60 text-emerald-300 border border-emerald-700',
+        P: 'bg-orange-900/60 text-orange-300 border border-orange-700',
+        J: 'bg-blue-900/60 text-blue-300 border border-blue-700',
+        PP: 'bg-purple-900/60 text-purple-300 border border-purple-700'
+      }[type] || 'bg-zinc-800 text-zinc-300';
+    },
+
+    removeEntry(id) {
+      const victim = this.entries.find(e => e.id === id);
+      if (victim && victim.linkedId) {
+        const partner = this.entries.find(e => e.id === victim.linkedId);
+        if (partner) { partner.linkedId = null; partner.returnSig = null; partner.returnType = null; partner.routeStatus = 'one-way'; }
+      }
+      this.entries = this.entries.filter(e => e.id !== id);
+      this.linkBidirectionalRoutes();
+      if (this.activeTab === 'map') this.$nextTick(() => this.drawMap());
+    },
+
+    clearAll() {
+      this.entries = [];
+      if (this.activeTab === 'map') this.$nextTick(() => this.drawMap());
+    },
+
+    // ─── Map Engine ───────────────────────────────────────────────
+
+    TYPE_COLORS: { H: '#00B074', L: '#EAB308', N: '#EF4444', P: '#FF8C00', J: '#3B82F6', PP: '#8B5CF6', unknown: '#94a3b8' },
+    BOOKMARK_DASH: [9, 6],
+    HOME_SYSTEMS: ['Kino', 'Niarja', 'Archee'],
+    BORDER_SYSTEMS: ['Arvasaras', 'Sakenta', 'Otanuomi', 'Ahtila', 'Urhinichi', 'Senda'],
+    KRAI_SYSTEMS: {
+      perun:  ['Kino','Ignebaener','Komo','Konola','Krirald','Nalvula','Otela','Sakenta','Arvasaras','Otanuomi'],
+      svarog: ['Niarja','Harva','Kuharah','Nani','Raravoss','Skarkon','Tunudan','Ahtila','Urhinichi'],
+      veles:  ['Archee','Ala','Angymonne','Ichoriya','Kaunokka','Vale','Wirashoda','Senda'],
+    },
+    ROUTE_BULGE: 260,
+    ROUTE_CLEARANCE: 110,
+    DOCK_OFFSET: 72,
+    DOCK_MIN_SEP: 54,
+    ARC_BYPASS: [28, 42, 58, 74],
+    EXT_NODE_W: 92,
+    EXT_NODE_H: 40,
+    POCHVEN_BOX_W: 58,
+    POCHVEN_BOX_H: 22,
+
+    isSouthBaseSystem(name) {
+      const n = this.normSystem(name);
+      return this.SOUTH_BASE_SYSTEMS.some(s => this.normSystem(s) === n);
+    },
+
+    aabbOverlaps(a, b, pad = 0) {
+      return a.bx - pad < b.bx + b.bw + pad
+        && a.bx + a.bw + pad > b.bx - pad
+        && a.by - pad < b.by + b.bh + pad
+        && a.by + a.bh + pad > b.by - pad;
+    },
+
+    beginSigLabelFrame(layout, positions = null) {
+      const systemBoxes = [];
+      const hw = this.POCHVEN_BOX_W / 2;
+      const hh = this.POCHVEN_BOX_H / 2;
+      for (const name in layout.systems) {
+        const s = layout.systems[name];
+        systemBoxes.push({ bx: s.x - hw, by: s.y - hh, bw: this.POCHVEN_BOX_W, bh: this.POCHVEN_BOX_H });
+      }
+      if (positions) {
+        for (const key in positions) {
+          const node = positions[key];
+          if (node.isPochven) continue;
+          const extH = node.jumps != null ? 48 : this.EXT_NODE_H;
+          systemBoxes.push({
+            bx: node.x - this.EXT_NODE_W / 2,
+            by: node.y - extH / 2,
+            bw: this.EXT_NODE_W,
+            bh: extH,
+          });
+        }
+      }
+      this._sigLabelFrame = { placed: [], systemBoxes, density: {} };
+    },
+
+    endSigLabelFrame() {
+      this._sigLabelFrame = null;
+    },
+
+    reserveSigLabelBox(box) {
+      if (!this._sigLabelFrame) return;
+      this._sigLabelFrame.placed.push(box);
+      const gx = Math.floor(box.bx / 80);
+      const gy = Math.floor(box.by / 60);
+      const key = `${gx},${gy}`;
+      this._sigLabelFrame.density[key] = (this._sigLabelFrame.density[key] || 0) + 1;
+    },
+
+    sigLabelZoneDensity(x, y) {
+      if (!this._sigLabelFrame) return 0;
+      const gx = Math.floor(x / 80);
+      const gy = Math.floor(y / 60);
+      let total = 0;
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          total += this._sigLabelFrame.density[`${gx + dx},${gy + dy}`] || 0;
+        }
+      }
+      return total;
+    },
+
+    sigLabelCollides(box, pad = 0) {
+      const frame = this._sigLabelFrame;
+      if (!frame) return false;
+      for (const placed of frame.placed) {
+        if (this.aabbOverlaps(box, placed, pad)) return true;
+      }
+      for (const sys of frame.systemBoxes) {
+        if (this.aabbOverlaps(box, sys, pad)) return true;
+      }
+      return false;
+    },
+
+    pickSigFontScale(anchorX, anchorY, attemptIndex) {
+      const density = this.sigLabelZoneDensity(anchorX, anchorY);
+      let idx = 0;
+      if (density >= 3 || attemptIndex >= 6) idx = 1;
+      if (density >= 5 || attemptIndex >= 10) idx = 2;
+      if (density >= 7 || attemptIndex >= 14) idx = 3;
+      const fontSize = this.SIG_FONT_SIZES[idx];
+      const padX = Math.max(4, 8 - idx);
+      const bh = Math.max(14, 18 - idx * 1.5);
+      return { fontSize, padX, bh, radius: bh / 2 };
+    },
+
+    computeSigLabelLayout(ctx, x, y, angle, label, slotIndex = 0, opts = {}) {
+      const preferSouth = opts.preferSouth === true;
+      const scale = opts.scale || this.pickSigFontScale(x, y, slotIndex);
+      const perpX = -Math.sin(angle);
+      const perpY = Math.cos(angle);
+      const tangX = Math.cos(angle);
+      const tangY = Math.sin(angle);
+      let side = slotIndex % 2 === 0 ? 1 : -1;
+      // Near southern base, bias labels into open space below the triangle
+      if (preferSouth) {
+        const southDot = perpY; // positive perpY points more "down" when angle is horizontal-ish
+        if (southDot * side < 0) side = -side;
+        if (Math.abs(perpY) < 0.35) {
+          // nearly vertical links: push below midpoint
+          side = 1;
+        }
+      }
+      const tier = Math.floor(slotIndex / 2);
+      const perpDist = 18 + tier * 24 + (preferSouth ? tier * 6 : 0);
+      const tangDist = tier * 14 * (slotIndex % 4 < 2 ? -1 : 1)
+        + (opts.tangExtra || 0);
+
+      let lx = x + perpX * perpDist * side + tangX * tangDist;
+      let ly = y + perpY * perpDist * side + tangY * tangDist;
+      if (preferSouth && ly < y + 12) ly = y + 14 + tier * 10;
+
+      ctx.font = `bold ${scale.fontSize}px monospace`;
+      const tw = ctx.measureText(label).width;
+      const bw = tw + scale.padX * 2;
+      const bx = lx - bw / 2;
+      const by = ly - scale.bh / 2;
+      return {
+        lx, ly, bx, by, bw, bh: scale.bh, radius: scale.radius,
+        fontSize: scale.fontSize, padX: scale.padX,
+      };
+    },
+
+    resolveSigLabelPlacement(ctx, x, y, angle, label, startSlot = 0, anchorOpts = {}) {
+      const pad = this.SIG_LABEL_PAD;
+      const maxSlots = this.SIG_LABEL_MAX_SLOTS;
+      const preferSouth = anchorOpts.preferSouth === true;
+      const segLen = anchorOpts.segLen || 0;
+      const tangShifts = [0];
+      if (segLen >= 40) {
+        const step = Math.min(Math.max(segLen * 0.08, 12), 36);
+        for (let i = 1; i <= 4; i++) tangShifts.push(step * i, -step * i);
+      }
+
+      let attempt = 0;
+      for (let slot = startSlot; slot < startSlot + maxSlots; slot++) {
+        for (const tangExtra of tangShifts) {
+          const scale = this.pickSigFontScale(x, y, attempt);
+          const layout = this.computeSigLabelLayout(ctx, x, y, angle, label, slot, {
+            preferSouth, scale, tangExtra,
+          });
+          const box = { bx: layout.bx, by: layout.by, bw: layout.bw, bh: layout.bh };
+          if (!this.sigLabelCollides(box, pad)) {
+            this.reserveSigLabelBox(box);
+            return layout;
+          }
+          attempt++;
+        }
+      }
+
+      const scale = this.pickSigFontScale(x, y, maxSlots);
+      const layout = this.computeSigLabelLayout(ctx, x, y, angle, label, startSlot + maxSlots - 1, {
+        preferSouth, scale,
+      });
+      this.reserveSigLabelBox({ bx: layout.bx, by: layout.by, bw: layout.bw, bh: layout.bh });
+      return layout;
+    },
+
+    isBorderSystem(name) {
+      return this.BORDER_SYSTEMS.some(s => this.normSystem(s) === this.normSystem(name));
+    },
+
+    getKraiStyle(krai) {
+      return this.KRAI_NODE_STYLE[krai] || this.KRAI_NODE_STYLE.veles;
+    },
+
+    isHomeSystem(name) {
+      return name in this.KRAI_HOME || this.HOME_SYSTEMS.some(s => this.normSystem(s) === this.normSystem(name));
+    },
+
+    hasKraiOverlap(name) {
+      return !!this.KRAI_OVERLAP[name];
+    },
+
+    getOutwardNormal(anchor, triangle) {
+      const { apex, left, right } = triangle;
+      const dLeft = this.distToSegment(anchor.x, anchor.y, apex.x, apex.y, left.x, left.y);
+      const dRight = this.distToSegment(anchor.x, anchor.y, apex.x, apex.y, right.x, right.y);
+      const dBase = this.distToSegment(anchor.x, anchor.y, left.x, left.y, right.x, right.y);
+      let e1, e2;
+      if (dBase <= dLeft && dBase <= dRight) { e1 = left; e2 = right; }
+      else if (dLeft <= dRight) { e1 = apex; e2 = left; }
+      else { e1 = apex; e2 = right; }
+      const ex = e2.x - e1.x, ey = e2.y - e1.y;
+      let nx = -ey, ny = ex;
+      const len = Math.hypot(nx, ny) || 1;
+      nx /= len; ny /= len;
+      if (this.pointInTriangle({ x: anchor.x + nx * 12, y: anchor.y + ny * 12 }, triangle)) {
+        nx = -nx; ny = -ny;
+      }
+      return { x: nx, y: ny };
+    },
+
+    segmentsCross(a0, a1, b0, b1, margin = 0.04) {
+      const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+      const d1 = cross(a0, a1, b0), d2 = cross(a0, a1, b1);
+      const d3 = cross(b0, b1, a0), d4 = cross(b0, b1, a1);
+      if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+          ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return true;
+      const onSeg = (p, q, r) => (
+        Math.min(p.x, r.x) - 1 <= q.x && q.x <= Math.max(p.x, r.x) + 1 &&
+        Math.min(p.y, r.y) - 1 <= q.y && q.y <= Math.max(p.y, r.y) + 1
+      );
+      if (Math.abs(d1) < 1e-6 && onSeg(a0, b0, a1)) return true;
+      if (Math.abs(d2) < 1e-6 && onSeg(a0, b1, a1)) return true;
+      if (Math.abs(d3) < 1e-6 && onSeg(b0, a0, b1)) return true;
+      if (Math.abs(d4) < 1e-6 && onSeg(b0, a1, b1)) return true;
+      return false;
+    },
+
+    segmentIntersectsAABB(p0, p1, cx, cy, hw, hh) {
+      const inBox = p => p.x >= cx - hw && p.x <= cx + hw && p.y >= cy - hh && p.y <= cy + hh;
+      if (inBox(p0) || inBox(p1)) return true;
+      const corners = [
+        [{ x: cx - hw, y: cy - hh }, { x: cx + hw, y: cy - hh }],
+        [{ x: cx + hw, y: cy - hh }, { x: cx + hw, y: cy + hh }],
+        [{ x: cx + hw, y: cy + hh }, { x: cx - hw, y: cy + hh }],
+        [{ x: cx - hw, y: cy + hh }, { x: cx - hw, y: cy - hh }],
+      ];
+      return corners.some(([a, b]) => this.segmentsCross(p0, p1, a, b));
+    },
+
+    buildRouteObstacles(layout, fromName, toName) {
+      const skip = new Set([this.normSystem(fromName), this.normSystem(toName)]);
+      const boxes = [];
+      for (const name in layout.systems) {
+        if (skip.has(this.normSystem(name))) continue;
+        const s = layout.systems[name];
+        boxes.push({
+          cx: s.x, cy: s.y,
+          hw: this.POCHVEN_BOX_W / 2 + 3,
+          hh: this.POCHVEN_BOX_H / 2 + 3,
+        });
+      }
+      const gates = [];
+      for (const [a, b] of layout.gates) {
+        const sa = layout.systems[a], sb = layout.systems[b];
+        if (!sa || !sb) continue;
+        gates.push({ x1: sa.x, y1: sa.y, x2: sb.x, y2: sb.y });
+      }
+      return { boxes, gates };
+    },
+
+    segmentHitsObstacles(p0, p1, obstacles) {
+      for (const b of obstacles.boxes) {
+        if (this.segmentIntersectsAABB(p0, p1, b.cx, b.cy, b.hw, b.hh)) return true;
+      }
+      for (const g of obstacles.gates) {
+        if (this.segmentsCross(p0, p1, { x: g.x1, y: g.y1 }, { x: g.x2, y: g.y2 })) return true;
+      }
+      return false;
+    },
+
+    cubicHitsObstacles(p0, p1, cp1, cp2, obstacles, steps = 12) {
+      let prev = p0;
+      for (let i = 1; i <= steps; i++) {
+        const pt = this.pointOnCubic(i / steps, p0, cp1, cp2, p1);
+        if (this.segmentHitsObstacles(prev, pt, obstacles)) return true;
+        prev = pt;
+      }
+      return false;
+    },
+
+    resolveBookmarkRoute(p0, p1, layout, fromName, toName) {
+      const obstacles = this.buildRouteObstacles(layout, fromName, toName);
+      if (!this.segmentHitsObstacles(p0, p1, obstacles)) return { type: 'straight' };
+
+      const dx = p1.x - p0.x, dy = p1.y - p0.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len, ny = dx / len;
+      const mid = { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 };
+
+      for (const bulge of this.ARC_BYPASS) {
+        for (const sign of [1, -1]) {
+          const cx = mid.x + nx * bulge * sign;
+          const cy = mid.y + ny * bulge * sign;
+          const cp1 = { x: p0.x + (cx - p0.x) * 0.55, y: p0.y + (cy - p0.y) * 0.55 };
+          const cp2 = { x: p1.x + (cx - p1.x) * 0.55, y: p1.y + (cy - p1.y) * 0.55 };
+          if (!this.cubicHitsObstacles(p0, p1, cp1, cp2, obstacles)) {
+            return { type: 'curve', cp1, cp2 };
+          }
+        }
+      }
+      const bulge = 88;
+      const cx = mid.x + nx * bulge;
+      const cy = mid.y + ny * bulge;
+      return {
+        type: 'curve',
+        cp1: { x: p0.x + (cx - p0.x) * 0.55, y: p0.y + (cy - p0.y) * 0.55 },
+        cp2: { x: p1.x + (cx - p1.x) * 0.55, y: p1.y + (cy - p1.y) * 0.55 },
+      };
+    },
+
+    computeProximityDockPosition(anchor, triangle, placed) {
+      const outward = this.getOutwardNormal(anchor, triangle);
+      const tangent = { x: -outward.y, y: outward.x };
+      let x = anchor.x + outward.x * this.DOCK_OFFSET;
+      let y = anchor.y + outward.y * this.DOCK_OFFSET;
+
+      for (let pass = 0; pass < 16; pass++) {
+        let moved = false;
+        for (const other of placed) {
+          const d = Math.hypot(x - other.x, y - other.y);
+          if (d < this.DOCK_MIN_SEP) {
+            const push = (this.DOCK_MIN_SEP - d) * 0.55 + 2;
+            const along = (y - anchor.y) >= 0 ? 1 : -1;
+            x += tangent.x * push * along;
+            y += tangent.y * push * along;
+            moved = true;
+          }
+        }
+        if (!moved) break;
+      }
+      return { x, y, outward };
+    },
+
+    drawStraightBookmarkPath(ctx, p0, p1, color, options = {}) {
+      const { dashed = true, lineWidth = 2.5, label = null, labelSlot = 0, twoWay = false, preferSouth = false } = options;
+      const angle = Math.atan2(p1.y - p0.y, p1.x - p0.x);
+      ctx.beginPath();
+      ctx.moveTo(p0.x, p0.y);
+      ctx.lineTo(p1.x, p1.y);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.globalAlpha = 0.92;
+      ctx.setLineDash(dashed ? this.BOOKMARK_DASH : []);
+      ctx.lineCap = 'round';
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+
+      if (label) {
+        const mx = (p0.x + p1.x) / 2, my = (p0.y + p1.y) / 2;
+        const segLen = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+        this.drawSigLabel(ctx, mx, my, angle, label, color, labelSlot, { segLen, preferSouth });
+      }
+      this.drawArrowHead(ctx, p1.x, p1.y, angle, 9, color, true);
+      if (twoWay) this.drawArrowHead(ctx, p0.x, p0.y, angle + Math.PI, 9, color, true);
+    },
+
+    pointOnCubic(t, p0, cp1, cp2, p1) {
+      const mt = 1 - t, mt2 = mt * mt, mt3 = mt2 * mt, t2 = t * t, t3 = t2 * t;
+      return {
+        x: mt3 * p0.x + 3 * mt2 * t * cp1.x + 3 * mt * t2 * cp2.x + t3 * p1.x,
+        y: mt3 * p0.y + 3 * mt2 * t * cp1.y + 3 * mt * t2 * cp2.y + t3 * p1.y,
+      };
+    },
+
+    tangentOnCubic(t, p0, cp1, cp2, p1) {
+      const mt = 1 - t;
+      const dx = 3 * mt * mt * (cp1.x - p0.x) + 6 * mt * t * (cp2.x - cp1.x) + 3 * t * t * (p1.x - cp2.x);
+      const dy = 3 * mt * mt * (cp1.y - p0.y) + 6 * mt * t * (cp2.y - cp1.y) + 3 * t * t * (p1.y - cp2.y);
+      return Math.atan2(dy, dx);
+    },
+
+    distToSegment(px, py, x1, y1, x2, y2) {
+      const dx = x2 - x1, dy = y2 - y1;
+      const len2 = dx * dx + dy * dy;
+      if (len2 === 0) return Math.hypot(px - x1, py - y1);
+      let t = ((px - x1) * dx + (py - y1) * dy) / len2;
+      t = Math.max(0, Math.min(1, t));
+      return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+    },
+
+    pointInTriangle(p, tri) {
+      const { apex: a, left: b, right: c } = tri;
+      const sign = (p1, p2, p3) => (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y);
+      const d1 = sign(p, a, b), d2 = sign(p, b, c), d3 = sign(p, c, a);
+      const hasNeg = d1 < 0 || d2 < 0 || d3 < 0;
+      const hasPos = d1 > 0 || d2 > 0 || d3 > 0;
+      return !(hasNeg && hasPos);
+    },
+
+    classifyTriangleZone(p, tri) {
+      const { apex, left, right } = tri;
+      if (p.y <= apex.y + 50) return 'apex';
+      const dLeft = this.distToSegment(p.x, p.y, apex.x, apex.y, left.x, left.y);
+      const dRight = this.distToSegment(p.x, p.y, apex.x, apex.y, right.x, right.y);
+      const dBase = this.distToSegment(p.x, p.y, left.x, left.y, right.x, right.y);
+      if (Math.abs(p.y - left.y) < 28 || dBase <= dLeft && dBase <= dRight) return 'base';
+      return dLeft <= dRight ? 'left' : 'right';
+    },
+
+    needsExteriorRoute(p0, p1, tri) {
+      const z0 = this.classifyTriangleZone(p0, tri);
+      const z1 = this.classifyTriangleZone(p1, tri);
+      if (z0 === 'left' && z1 === 'right') return true;
+      if (z0 === 'right' && z1 === 'left') return true;
+      if (z0 === 'base' && z1 === 'base') return Math.hypot(p1.x - p0.x, p1.y - p0.y) > 90;
+      const mid = { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 };
+      if (!this.pointInTriangle(mid, tri)) return false;
+      if (z0 !== z1) return true;
+      return Math.hypot(p1.x - p0.x, p1.y - p0.y) > 85;
+    },
+
+    pickPerimeterSide(p0, p1, tri, mapCenter) {
+      const z0 = this.classifyTriangleZone(p0, tri);
+      const z1 = this.classifyTriangleZone(p1, tri);
+      const avgX = (p0.x + p1.x) / 2;
+      const avgY = (p0.y + p1.y) / 2;
+
+      if ((z0 === 'left' && z1 === 'right') || (z0 === 'right' && z1 === 'left')) {
+        return avgY > mapCenter.y + 35 ? 'bottom' : (avgX <= mapCenter.x ? 'left' : 'right');
+      }
+      if (z0 === 'base' || z1 === 'base') {
+        if (z0 === 'base' && z1 === 'base') return 'bottom';
+        const wing = z0 === 'base' ? z1 : z0;
+        if (wing === 'left') return 'left';
+        if (wing === 'right') return 'right';
+        return 'bottom';
+      }
+      if (z0 === 'apex' || z1 === 'apex') {
+        const wing = z0 === 'apex' ? z1 : z0;
+        if (wing === 'left') return 'left';
+        if (wing === 'right') return 'right';
+        return avgX <= mapCenter.x ? 'left' : 'right';
+      }
+      if (avgY > mapCenter.y + 45) return 'bottom';
+      return avgX <= mapCenter.x ? 'left' : 'right';
+    },
+
+    computeWideCubicControls(p0, p1, layout, opts = {}) {
+      const { mapCenter, bounds, triangle } = layout;
+      const tri = triangle;
+      const C = this.ROUTE_CLEARANCE;
+      const B = this.ROUTE_BULGE;
+      const left = bounds.minX - C - B * 0.35;
+      const right = bounds.maxX + C + B * 0.35;
+      const bottom = bounds.maxY + C + B * 0.3;
+      const top = bounds.minY - C - B * 0.4;
+      const dist = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+      const bulge = Math.max(B, dist * 0.5) + C;
+
+      if (opts.external) {
+        const yPad = bulge * 0.14;
+        if (opts.dock === 'left') {
+          return {
+            cp1: { x: left, y: p0.y + (p0.y <= p1.y ? -yPad : yPad) },
+            cp2: { x: left, y: p1.y + (p1.y <= p0.y ? -yPad : yPad) },
+          };
+        }
+        return {
+          cp1: { x: right, y: p0.y + (p0.y <= p1.y ? -yPad : yPad) },
+          cp2: { x: right, y: p1.y + (p1.y <= p0.y ? -yPad : yPad) },
+        };
+      }
+
+      const exterior = opts.external || opts.forcePerimeter || this.needsExteriorRoute(p0, p1, tri);
+      if (!exterior) {
+        const mid = { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 };
+        if (this.pointInTriangle(mid, tri)) {
+          return this.computeWideCubicControls(p0, p1, layout, { ...opts, forcePerimeter: true });
+        }
+        return { cp1: { x: p0.x, y: p0.y }, cp2: { x: p1.x, y: p1.y } };
+      }
+
+      const routeSide = this.pickPerimeterSide(p0, p1, tri, mapCenter);
+      switch (routeSide) {
+        case 'bottom':
+          return { cp1: { x: p0.x, y: bottom }, cp2: { x: p1.x, y: bottom } };
+        case 'left':
+          return {
+            cp1: { x: left, y: p0.y + (p0.y < mapCenter.y ? -bulge * 0.14 : bulge * 0.1) },
+            cp2: { x: left, y: p1.y + (p1.y < mapCenter.y ? -bulge * 0.14 : bulge * 0.1) },
+          };
+        case 'top':
+          return { cp1: { x: p0.x, y: top }, cp2: { x: p1.x, y: top } };
+        case 'right':
+        default:
+          return {
+            cp1: { x: right, y: p0.y + (p0.y < mapCenter.y ? -bulge * 0.14 : bulge * 0.1) },
+            cp2: { x: right, y: p1.y + (p1.y < mapCenter.y ? -bulge * 0.14 : bulge * 0.1) },
+          };
+      }
+    },
+
+    drawCubicPath(ctx, p0, p1, cp1, cp2, color, options = {}) {
+      const { dashed = true, lineWidth = 2.5, label = null, labelSlot = 0, drawArrows = true, twoWay = false, preferSouth = false } = options;
+      ctx.beginPath();
+      ctx.moveTo(p0.x, p0.y);
+      ctx.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, p1.x, p1.y);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.globalAlpha = 0.92;
+      ctx.setLineDash(dashed ? this.BOOKMARK_DASH : []);
+      ctx.lineCap = 'round';
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+
+      const tMid = 0.5;
+      const mid = this.pointOnCubic(tMid, p0, cp1, cp2, p1);
+      const tang = this.tangentOnCubic(tMid, p0, cp1, cp2, p1);
+      if (label) {
+        const segLen = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+        this.drawSigLabel(ctx, mid.x, mid.y, tang, label, color, labelSlot, { segLen, preferSouth });
+      }
+
+      if (drawArrows) {
+        const endPt = this.pointOnCubic(0.94, p0, cp1, cp2, p1);
+        const endAng = this.tangentOnCubic(0.94, p0, cp1, cp2, p1);
+        this.drawArrowHead(ctx, endPt.x, endPt.y, endAng, 9, color, true);
+        if (twoWay) {
+          const startPt = this.pointOnCubic(0.06, p0, cp1, cp2, p1);
+          const startAng = this.tangentOnCubic(0.06, p0, cp1, cp2, p1);
+          this.drawArrowHead(ctx, startPt.x, startPt.y, startAng + Math.PI, 9, color, true);
+        }
+      }
+    },
+
+    externalInnerAnchor(node, target) {
+      const hw = this.EXT_NODE_W / 2, hh = this.EXT_NODE_H / 2;
+      if (node.dock === 'left') return { x: node.x + hw, y: node.y };
+      if (node.dock === 'right') return { x: node.x - hw, y: node.y };
+      if (node.dock === 'bottom') return { x: node.x, y: node.y - hh };
+      const angle = Math.atan2(target.y - node.y, target.x - node.x);
+      return {
+        x: node.x + Math.cos(angle) * hw,
+        y: node.y + Math.sin(angle) * hh * 0.65,
+      };
+    },
+
+    drawSigLabel(ctx, x, y, angle, label, color, slotIndex = 0, anchorOpts = {}) {
+      if (!label || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(angle)) return;
+
+      const layout = this.resolveSigLabelPlacement(ctx, x, y, angle, label, slotIndex, anchorOpts);
+      const { lx, ly, bx, by, bw, bh, radius, fontSize } = layout;
+
+      ctx.save();
+      ctx.fillStyle = 'rgba(5, 5, 5, 0.98)';
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(bx, by, bw, bh, radius);
+      else ctx.rect(bx, by, bw, bh);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = color;
+      ctx.font = `bold ${fontSize || 10}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, lx, ly);
+      ctx.restore();
+    },
+
+    drawCurvedPath(ctx, p0, p1, cp1, cp2, color, options = {}) {
+      this.drawCubicPath(ctx, p0, p1, cp1, cp2 || cp1, color, options);
+    },
+
+    secClassFromType(type) {
+      const t = type ? this.normalizeWormholeType(type) : null;
+      const map = {
+        H:  { label: 'Highsec',  short: 'HS',   color: '#00B074' },
+        L:  { label: 'Lowsec',   short: 'LS',   color: '#EAB308' },
+        N:  { label: 'Nullsec',  short: 'Null', color: '#EF4444' },
+        J:  { label: 'J-Space',  short: 'WH',   color: '#3B82F6' },
+        PP: { label: 'P-P Int.', short: 'PP',   color: '#8B5CF6' },
+      };
+      // Never paint external docks as Pochven orange
+      if (!t || t === 'P') return { label: 'Unknown', short: '?', color: '#94a3b8' };
+      return map[t] || { label: 'Unknown', short: '?', color: '#94a3b8' };
+    },
+
+    typeColor(type) {
+      const t = type ? this.normalizeWormholeType(type) : null;
+      if (!t || t === 'P') return this.TYPE_COLORS.unknown;
+      return this.TYPE_COLORS[t] || this.TYPE_COLORS.unknown;
+    },
+
+    NEUTRAL_NODE_STYLE: { fill: '#18181b', border: '#52525b', text: '#e4e4e7' },
+
+    getLinkDisplayType(link) {
+      const fromIsP = !!this.findPochvenSystem(link.from);
+      const toIsP = !!this.findPochvenSystem(link.to);
+      const raw = (link.forward || link.reverse)?.type;
+      if (fromIsP && toIsP) {
+        const t = this.normalizeWormholeType(raw);
+        if (t === 'J') return 'J';
+        return 'PP';
+      }
+      const extName = !fromIsP ? link.from : link.to;
+      const dockType = this.resolveExternalDockType(extName, raw);
+      if (dockType) return dockType;
+      const t = this.normalizeWormholeType(raw);
+      if (t === 'H' || t === 'L' || t === 'N' || t === 'J' || t === 'PP') return t;
+      return null;
+    },
+
+    isConnectionFilterEnabled(type) {
+      const t = type ? this.normalizeWormholeType(type) : null;
+      if (t === 'PP') return this.filters.PP;
+      if (t === 'H') return this.filters.H;
+      if (t === 'L') return this.filters.L;
+      if (t === 'N') return this.filters.N;
+      if (t === 'J') return this.filters.J;
+      return this.filters.H || this.filters.L || this.filters.N || this.filters.J;
+    },
+
+    buildBookmarkLinks() {
+      const pairKey = (a, b) => [this.normSystem(a), this.normSystem(b)].sort().join('||');
+      const norm = s => this.normSystem(s);
+      const linkMap = {};
+
+      for (const entry of this.entries) {
+        if (this.isEntryExpired(entry)) continue;
+        const key = pairKey(entry.origin, entry.destination);
+        if (!linkMap[key]) linkMap[key] = { legs: [] };
+        linkMap[key].legs.push(entry);
+      }
+
+      return Object.values(linkMap).map(group => {
+        const legs = group.legs;
+        let forward = legs[0], reverse = null;
+        for (const a of legs) {
+          for (const b of legs) {
+            if (a.id === b.id) continue;
+            if (norm(a.origin) === norm(b.destination) && norm(a.destination) === norm(b.origin)) {
+              forward = a; reverse = b; break;
+            }
+          }
+          if (reverse) break;
+        }
+        const expired = legs.some(e => this.isEntryExpired(e));
+        return {
+          from: forward.origin,
+          to: forward.destination,
+          forward, reverse,
+          twoWay: !!reverse,
+          eol: legs.some(e => e.trackCountdown && e.eol),
+          expired,
+        };
+      }).filter(link => !link.expired);
+    },
+
+    layoutMapPositions(links) {
+      const layout = this.getPochvenLayout();
+      const { systems, mapCenter } = layout;
+      const positions = {};
+      const connectors = [];
+      const splitX = mapCenter.x;
+
+      for (const name in systems) {
+        const s = systems[name];
+        const key = this.normSystem(name);
+        positions[key] = { x: s.x, y: s.y, isPochven: true, name: s.name };
+      }
+
+      const externalMap = new Map();
+
+      for (const link of links) {
+        const fwd = link.forward;
+        const rev = link.reverse;
+        const type = fwd.type;
+        const fromIsP = !!this.findPochvenSystem(link.from);
+        const toIsP = !!this.findPochvenSystem(link.to);
+
+        if (fromIsP && toIsP) continue;
+
+        const extName = !fromIsP ? link.from : link.to;
+        const anchorName = fromIsP ? link.from : link.to;
+        const key = this.normSystem(extName);
+        const anchor = this.findPochvenSystem(anchorName);
+
+        if (!externalMap.has(key)) {
+          let side = 'right';
+          if (anchor && this.isSouthBaseSystem(anchorName)) side = 'bottom';
+          else if (anchor && anchor.x < splitX) side = 'left';
+          else side = 'right';
+
+          const dockType = this.resolveExternalDockType(extName, type);
+          const jumps = dockType === 'H' ? this.getCachedJitaJumps(extName) : null;
+          externalMap.set(key, {
+            name: extName,
+            anchor: anchorName,
+            anchorPos: anchor,
+            side,
+            type: dockType,
+            bookmarkType: type,
+            jumps,
+            sig: fwd.sig,
+            returnSig: rev ? rev.sig : null,
+            twoWay: link.twoWay,
+            eol: link.eol,
+            expired: link.expired,
+          });
+        }
+      }
+
+      const sortByAnchorY = (a, b) => (a.anchorPos?.y || 0) - (b.anchorPos?.y || 0);
+      const sortByAnchorX = (a, b) => (a.anchorPos?.x || 0) - (b.anchorPos?.x || 0);
+      const leftItems = [...externalMap.values()].filter(e => e.side === 'left').sort(sortByAnchorY);
+      const rightItems = [...externalMap.values()].filter(e => e.side === 'right').sort(sortByAnchorY);
+      const bottomItems = [...externalMap.values()].filter(e => e.side === 'bottom').sort(sortByAnchorX);
+
+      const dockItem = (ext, index, dock, count) => {
+        let x, y;
+        if (dock === 'bottom') {
+          const span = Math.max(1, count - 1);
+          const totalW = span * this.BOTTOM_DOCK_GAP;
+          const startX = mapCenter.x - totalW / 2;
+          x = count === 1 ? mapCenter.x : startX + index * this.BOTTOM_DOCK_GAP;
+          // Stagger below the lowered South Dock baseline (keeps clearance under Vale–Niarja)
+          y = this.BOTTOM_DOCK_Y + (index % 2) * 22;
+        } else {
+          x = dock === 'left' ? this.LEFT_DOCK_X : this.RIGHT_DOCK_X;
+          y = this.DOCK_TOP_Y + index * this.DOCK_ROW_H;
+        }
+        const sec = this.secClassFromType(ext.type);
+        const key = this.normSystem(ext.name);
+        positions[key] = {
+          x, y, isPochven: false, name: ext.name, dock, sec,
+          anchor: ext.anchor, anchorPos: ext.anchorPos,
+          sig: ext.sig, returnSig: ext.returnSig, twoWay: ext.twoWay,
+          eol: ext.eol, expired: ext.expired, type: ext.type, jumps: ext.jumps,
+        };
+        if (ext.anchorPos) {
+          connectors.push({ external: positions[key], anchor: ext.anchorPos, meta: ext });
+        }
+      };
+
+      leftItems.forEach((ext, i) => dockItem(ext, i, 'left', leftItems.length));
+      rightItems.forEach((ext, i) => dockItem(ext, i, 'right', rightItems.length));
+      bottomItems.forEach((ext, i) => dockItem(ext, i, 'bottom', bottomItems.length));
+
+      return {
+        positions,
+        connectors,
+        leftDock: { count: leftItems.length },
+        rightDock: { count: rightItems.length },
+        bottomDock: { count: bottomItems.length },
+      };
+    },
+
+    getActivePochvenSystems() {
+      const active = new Set();
+      for (const e of this.entries) {
+        if (this.findPochvenSystem(e.origin)) active.add(this.normSystem(e.origin));
+        if (this.findPochvenSystem(e.destination)) active.add(this.normSystem(e.destination));
+      }
+      return active;
+    },
+
+    drawPochvenBox(ctx, sys, isActive) {
+      const w = this.POCHVEN_BOX_W, h = this.POCHVEN_BOX_H;
+      const x = sys.x - w / 2, y = sys.y - h / 2;
+      const kraiStyle = this.filters.krai ? this.getKraiStyle(sys.krai) : this.NEUTRAL_NODE_STYLE;
+      const isHome = this.isHomeSystem(sys.name);
+      const isBorder = this.isBorderSystem(sys.name);
+      const killCount = this.getSystemKillCount(sys.name);
+      const showPvp = this.filters.pvp;
+      const hasCombat = showPvp && killCount >= this.PVP_FLASH_THRESHOLD;
+      let fill = kraiStyle.fill;
+      let border = kraiStyle.border;
+      let textColor = kraiStyle.text;
+      let lineW = 2;
+
+      if (isHome) {
+        border = '#fbbf24';
+        lineW = 3.5;
+      } else if (hasCombat) {
+        const pulse = 0.5 + Math.sin(Date.now() / 350) * 0.5;
+        ctx.shadowColor = `rgba(239, 68, 68, ${pulse})`;
+        ctx.shadowBlur = 12 + pulse * 10;
+        border = '#ef4444';
+        lineW = 3;
+      } else if (isActive) {
+        ctx.shadowColor = '#dc2626';
+        ctx.shadowBlur = 12;
+        border = '#f87171';
+        lineW = 2.5;
+      }
+
+      ctx.fillStyle = fill;
+      ctx.strokeStyle = border;
+      ctx.lineWidth = lineW;
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(x, y, w, h, 3);
+      else ctx.rect(x, y, w, h);
+      ctx.fill();
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      if (this.filters.krai && this.hasKraiOverlap(sys.name)) {
+        const sec = this.getKraiStyle(this.KRAI_OVERLAP[sys.name]);
+        ctx.strokeStyle = sec.border;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([3, 2]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      ctx.fillStyle = textColor;
+      ctx.font = 'bold 9px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(sys.name, sys.x, sys.y);
+
+      if (isHome) {
+        const bx = sys.x + w / 2 - 2, by = sys.y - h / 2 - 2;
+        ctx.fillStyle = '#fbbf24';
+        ctx.font = 'bold 6px sans-serif';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText('★ HOME', bx, by);
+      } else if (isBorder) {
+        const bx = sys.x + w / 2 - 2, by = sys.y - h / 2 - 2;
+        ctx.fillStyle = '#e2e8f0';
+        ctx.font = 'bold 6px sans-serif';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText('⬡ BDR', bx, by);
+      }
+
+      if (showPvp && killCount > 0) {
+        const kx = sys.x - w / 2 + 3, ky = sys.y + h / 2 - 2;
+        ctx.fillStyle = hasCombat ? '#fecaca' : '#94a3b8';
+        ctx.font = 'bold 6px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(`⚔${killCount}`, kx, ky);
+      }
+    },
+
+    drawDockPanel(ctx, dock, count) {
+      if (count === 0) return;
+      if (dock === 'bottom') {
+        const panelW = Math.max(140, (count - 1) * this.BOTTOM_DOCK_GAP + 120);
+        const x = this.MAP_CENTER.x - panelW / 2;
+        // Panel sits above dock cards; clearance to base boxes is enforced via BOTTOM_DOCK_Y
+        const y = this.BOTTOM_DOCK_Y - this.SOUTH_DOCK_PANEL_PAD;
+        const h = 40 + (count > 1 ? 22 : 0);
+        ctx.fillStyle = 'rgba(5, 5, 5, 0.82)';
+        ctx.strokeStyle = 'rgba(127, 29, 29, 0.65)';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        if (ctx.roundRect) ctx.roundRect(x, y, panelW, h, 6);
+        else ctx.rect(x, y, panelW, h);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#f87171';
+        ctx.font = 'bold 8px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.fillText('▼ SOUTH DOCK', this.MAP_CENTER.x, y + 6);
+        ctx.font = '7px sans-serif';
+        ctx.fillStyle = '#a1a1aa';
+        ctx.fillText('Base-line External Systems', this.MAP_CENTER.x, y + 16);
+        return;
+      }
+
+      const isLeft = dock === 'left';
+      const panelW = 108;
+      const x = isLeft ? this.LEFT_DOCK_X - 52 : this.RIGHT_DOCK_X - 56;
+      const y = this.DOCK_TOP_Y - 34;
+      const h = count * this.DOCK_ROW_H + 40;
+
+      ctx.fillStyle = 'rgba(5, 5, 5, 0.82)';
+      ctx.strokeStyle = 'rgba(127, 29, 29, 0.65)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(x, y, panelW, h, 6);
+      else ctx.rect(x, y, panelW, h);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = '#f87171';
+      ctx.font = 'bold 8px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText(isLeft ? '◀ WEST DOCK' : 'EAST DOCK ▶', x + panelW / 2, y + 6);
+      ctx.font = '7px sans-serif';
+      ctx.fillStyle = '#a1a1aa';
+      ctx.fillText('External Systems', x + panelW / 2, y + 16);
+    },
+
+    drawExternalNode(ctx, node) {
+      const w = 92;
+      const hasJumps = node.jumps != null;
+      const h = hasJumps ? 48 : 40;
+      const x = node.x - w / 2, y = node.y - h / 2;
+      const sec = node.sec || this.secClassFromType(node.type);
+
+      ctx.fillStyle = 'rgba(10, 10, 10, 0.96)';
+      ctx.strokeStyle = sec.color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(x, y, w, h, 6);
+      else ctx.rect(x, y, w, h);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const label = node.name.length > 13 ? node.name.slice(0, 11) + '…' : node.name;
+
+      if (hasJumps) {
+        ctx.fillStyle = '#e2e8f0';
+        ctx.font = 'bold 9px sans-serif';
+        ctx.fillText(label, node.x, node.y - 10);
+        ctx.fillStyle = sec.color;
+        ctx.font = 'bold 8px sans-serif';
+        ctx.fillText(sec.label, node.x, node.y + 2);
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '7px sans-serif';
+        ctx.fillText(`${node.jumps} jps`, node.x, node.y + 14);
+      } else {
+        ctx.fillStyle = '#e2e8f0';
+        ctx.font = 'bold 9px sans-serif';
+        ctx.fillText(label, node.x, node.y - 7);
+        ctx.fillStyle = sec.color;
+        ctx.font = 'bold 8px sans-serif';
+        ctx.fillText(sec.label, node.x, node.y + 9);
+      }
+    },
+
+    drawBookmarkLine(ctx, x1, y1, x2, y2, color, options = {}) {
+      const { dashed = true, lineWidth = 2.5, label = null, angle = null } = options;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.globalAlpha = 0.92;
+      ctx.setLineDash(dashed ? this.BOOKMARK_DASH : []);
+      ctx.lineCap = 'round';
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+
+      if (label && angle !== null) {
+        const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+        const perpX = -Math.sin(angle) * 12, perpY = Math.cos(angle) * 12;
+        ctx.font = 'bold 10px monospace';
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = 'rgba(5, 5, 5, 0.92)';
+        ctx.fillRect(mx + perpX - tw / 2 - 4, my + perpY - 8, tw + 8, 16);
+        ctx.fillStyle = color;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, mx + perpX, my + perpY);
+      }
+    },
+
+    drawDockConnector(ctx, external, anchor, labelSlot = 0, layoutCtx = null) {
+      const color = external.expired ? '#ef4444' : (external.eol ? '#fb923c' : this.typeColor(external.type));
+      const anchorPt = { x: anchor.x, y: anchor.y };
+      const start = this.externalInnerAnchor(external, anchorPt);
+      const padAnchor = this.boxEdgePad(anchorPt, start);
+      const ang = Math.atan2(start.y - anchor.y, start.x - anchor.x);
+      const end = { x: anchor.x - Math.cos(ang) * padAnchor, y: anchor.y - Math.sin(ang) * padAnchor };
+      const label = external.twoWay && external.returnSig ? `${external.sig} ↔ ${external.returnSig}` : external.sig;
+      const preferSouth = external.dock === 'bottom' || this.isSouthBaseSystem(external.anchor);
+      const opts = {
+        dashed: true, lineWidth: 2.5, label, labelSlot, twoWay: external.twoWay, preferSouth,
+      };
+
+      // South dock: exit base systems downward into the clearance corridor, then into the dock card
+      if (external.dock === 'bottom') {
+        const dy = start.y - end.y;
+        const drop = Math.max(36, Math.min(dy * 0.42, this.SOUTH_DOCK_CLEARANCE * 0.85));
+        const cp1 = { x: start.x, y: start.y - drop * 0.55 };
+        const cp2 = { x: end.x, y: end.y + drop };
+        this.drawCubicPath(ctx, start, end, cp1, cp2, color, opts);
+        return;
+      }
+
+      this.drawStraightBookmarkPath(ctx, start, end, color, opts);
+    },
+
+    edgePoint(from, to, pad) {
+      const angle = Math.atan2(to.y - from.y, to.x - from.x);
+      return {
+        x1: from.x + Math.cos(angle) * pad,
+        y1: from.y + Math.sin(angle) * pad,
+        x2: to.x - Math.cos(angle) * pad,
+        y2: to.y - Math.sin(angle) * pad,
+        angle
+      };
+    },
+
+    boxEdgePad(from, to) {
+      const angle = Math.atan2(to.y - from.y, to.x - from.x);
+      const hw = this.POCHVEN_BOX_W / 2, hh = this.POCHVEN_BOX_H / 2;
+      return Math.min(hw / Math.max(Math.abs(Math.cos(angle)), 0.01), hh / Math.max(Math.abs(Math.sin(angle)), 0.01));
+    },
+
+    drawPochvenBookmarkLink(ctx, from, to, link, labelSlot = 0, layoutCtx = null) {
+      const layout = layoutCtx || this.getPochvenLayout();
+      const padFrom = this.boxEdgePad(from, to);
+      const padTo = this.boxEdgePad(to, from);
+      const angle = Math.atan2(to.y - from.y, to.x - from.x);
+      const p0 = { x: from.x + Math.cos(angle) * padFrom, y: from.y + Math.sin(angle) * padFrom };
+      const p1 = { x: to.x - Math.cos(angle) * padTo, y: to.y - Math.sin(angle) * padTo };
+      const type = (link.forward || link.reverse).type;
+      const color = link.expired ? '#ef4444' : (link.eol ? '#fb923c' : this.typeColor(type));
+      const label = link.twoWay ? `${link.forward.sig} ↔ ${link.reverse.sig}` : link.forward.sig;
+      const preferSouth = this.isSouthBaseSystem(from.name) || this.isSouthBaseSystem(to.name)
+        || ((from.y + to.y) / 2 > 620);
+      const route = this.resolveBookmarkRoute(p0, p1, layout, from.name, to.name);
+      const opts = {
+        dashed: true, lineWidth: link.twoWay ? 3 : 2.5, label, labelSlot, twoWay: link.twoWay, preferSouth,
+      };
+
+      if (route.type === 'straight') {
+        this.drawStraightBookmarkPath(ctx, p0, p1, color, opts);
+      } else {
+        this.drawCubicPath(ctx, p0, p1, route.cp1, route.cp2, color, opts);
+      }
+    },
+
+    drawStaticGate(ctx, ax, ay, bx, by) {
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+      ctx.strokeStyle = '#3f3f46';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 0.65;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    },
+
+    drawArrowHead(ctx, x, y, angle, size, color, filled) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(-size, -size * 0.45);
+      ctx.lineTo(-size, size * 0.45);
+      ctx.closePath();
+      if (filled) { ctx.fillStyle = color; ctx.fill(); }
+      else { ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.stroke(); }
+      ctx.restore();
+    },
+
+    drawMap() {
+      const canvas = document.getElementById('mapCanvas');
+      if (!canvas) return;
+      const parent = canvas.parentElement;
+      const dpr = window.devicePixelRatio || 1;
+      const w = parent.clientWidth, h = parent.clientHeight;
+      canvas.width = w * dpr; canvas.height = h * dpr;
+      canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
+
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.fillStyle = '#050505';
+      ctx.fillRect(0, 0, w, h);
+
+      const layout = this.getPochvenLayout();
+      const { systems, gates, mapCenter, regionLabels } = layout;
+      const activeSystems = this.getActivePochvenSystems();
+      const links = this.buildBookmarkLinks().filter(link =>
+        this.isConnectionFilterEnabled(this.getLinkDisplayType(link))
+      );
+      const { positions, connectors, leftDock, rightDock, bottomDock } = this.layoutMapPositions(links);
+
+      // ESI security first, then Jita jumps for confirmed Highsec docks
+      this.ensureExternalSecurityClassification(this.buildBookmarkLinks()).then(async secChanged => {
+        const jitaChanged = await this.ensureJitaRoutesForHighsec(this.buildBookmarkLinks());
+        if ((secChanged || jitaChanged) && this.activeTab === 'map') this.drawMap();
+      });
+
+      const mc = mapCenter || this.MAP_CENTER;
+      const cx = w / 2 + this.mapOffset.x;
+      const cy = h / 2 + this.mapOffset.y;
+
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.scale(this.mapScale, this.mapScale);
+      ctx.translate(-mc.x, -mc.y);
+
+      // 1. Region text labels (interior)
+      if (this.filters.krai) this.drawRegionLabels(ctx, regionLabels);
+
+      // 2. External dock panels (west / east / south)
+      this.drawDockPanel(ctx, 'left', leftDock.count);
+      this.drawDockPanel(ctx, 'right', rightDock.count);
+      this.drawDockPanel(ctx, 'bottom', bottomDock.count);
+
+      // 3. Static Pochven stargate lines — straight solid
+      if (this.filters.gates) {
+        for (const [a, b] of gates) {
+          const na = systems[a], nb = systems[b];
+          if (!na || !nb) continue;
+          this.drawStaticGate(ctx, na.x, na.y, nb.x, nb.y);
+        }
+      }
+
+      this.beginSigLabelFrame(layout, positions);
+
+      // 4. Pochven-to-Pochven bookmark links — expired links already filtered out
+      const labelSlots = new Map();
+      let linkIdx = 0;
+      for (const link of links) {
+        const fromIsP = !!this.findPochvenSystem(link.from);
+        const toIsP = !!this.findPochvenSystem(link.to);
+        if (!fromIsP || !toIsP) continue;
+        const from = positions[this.normSystem(link.from)];
+        const to = positions[this.normSystem(link.to)];
+        if (!from || !to) continue;
+        const slotKey = `${Math.round((from.x + to.x) / 2)}_${Math.round((from.y + to.y) / 2)}`;
+        const slot = labelSlots.get(slotKey) || 0;
+        labelSlots.set(slotKey, slot + 1);
+        this.drawPochvenBookmarkLink(ctx, from, to, link, slot + linkIdx % 2, layout);
+        linkIdx++;
+      }
+
+      // 5. External dock connectors — side/bottom straight lines
+      connectors.forEach((conn, i) => {
+        this.drawDockConnector(ctx, conn.external, conn.anchor, i % 3, layout);
+      });
+
+      this.endSigLabelFrame();
+
+      // 6. External dock nodes (left / right / bottom)
+      const drawnExternal = new Set();
+      for (const key in positions) {
+        const node = positions[key];
+        if (!node.isPochven && !drawnExternal.has(key)) {
+          drawnExternal.add(key);
+          this.drawExternalNode(ctx, node);
+        }
+      }
+
+      // 7. Pochven system boxes on top (Krai-colored)
+      for (const name in systems) {
+        const sys = systems[name];
+        const isActive = activeSystems.has(this.normSystem(name));
+        this.drawPochvenBox(ctx, sys, isActive);
+      }
+
+      ctx.restore();
+
+      if (!canvas._mapInit) { canvas._mapInit = true; this.setupMapInteraction(canvas); }
+    },
+
+    setupMapInteraction(canvas) {
+      let dragging = false, lastX = 0, lastY = 0;
+      canvas.addEventListener('mousedown', e => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
+      window.addEventListener('mouseup', () => { dragging = false; });
+      canvas.addEventListener('mousemove', e => {
+        if (!dragging) return;
+        this.mapOffset.x += e.clientX - lastX;
+        this.mapOffset.y += e.clientY - lastY;
+        lastX = e.clientX; lastY = e.clientY;
+        this.drawMap();
+      });
+      canvas.addEventListener('wheel', e => {
+        e.preventDefault();
+        this.mapScale = Math.min(3, Math.max(0.3, this.mapScale * (e.deltaY > 0 ? 0.9 : 1.1)));
+        this.drawMap();
+      }, { passive: false });
+    }
+  };
+}
+</script>
+</body>
+</html>
