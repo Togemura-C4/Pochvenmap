@@ -2080,24 +2080,28 @@ function pochvenMapper() {
       const kraiStyle = this.filters.krai ? this.getKraiStyle(sys.krai) : this.NEUTRAL_NODE_STYLE;
       const isHome = this.isHomeSystem(sys.name);
       const isBorder = this.isBorderSystem(sys.name);
-      const killCount = this.getSystemKillCount(sys.name);
-      const showPvp = this.filters.pvp;
-      const hasCombat = showPvp && killCount >= this.PVP_FLASH_THRESHOLD;
+      // All PvP visuals (glow, combat border, ⚔ badge) are gated by filters.pvp
+      const pvpEnabled = this.filters.pvp === true;
+      const killCount = pvpEnabled ? this.getSystemKillCount(sys.name) : 0;
+      const hasCombat = pvpEnabled && killCount >= this.PVP_FLASH_THRESHOLD;
       let fill = kraiStyle.fill;
       let border = kraiStyle.border;
       let textColor = kraiStyle.text;
       let lineW = 2;
 
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+
       if (isHome) {
         border = '#fbbf24';
         lineW = 3.5;
-      } else if (hasCombat) {
+      } else if (pvpEnabled && hasCombat) {
         const pulse = 0.5 + Math.sin(Date.now() / 350) * 0.5;
         ctx.shadowColor = `rgba(239, 68, 68, ${pulse})`;
         ctx.shadowBlur = 12 + pulse * 10;
         border = '#ef4444';
         lineW = 3;
-      } else if (isActive) {
+      } else if (pvpEnabled && isActive) {
         ctx.shadowColor = '#dc2626';
         ctx.shadowBlur = 12;
         border = '#f87171';
@@ -2112,6 +2116,7 @@ function pochvenMapper() {
       else ctx.rect(x, y, w, h);
       ctx.fill();
       ctx.stroke();
+      ctx.shadowColor = 'transparent';
       ctx.shadowBlur = 0;
 
       if (this.filters.krai && this.hasKraiOverlap(sys.name)) {
@@ -2145,7 +2150,7 @@ function pochvenMapper() {
         ctx.fillText('⬡ BDR', bx, by);
       }
 
-      if (showPvp && killCount > 0) {
+      if (pvpEnabled && killCount > 0) {
         const kx = sys.x - w / 2 + 3, ky = sys.y + h / 2 - 2;
         ctx.fillStyle = hasCombat ? '#fecaca' : '#94a3b8';
         ctx.font = 'bold 6px sans-serif';
