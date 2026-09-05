@@ -737,16 +737,19 @@ function pochvenMapper() {
     },
 
     KRAI_MAP: {
+      // Perun (blue)
       Kino: 'perun', Ignebaener: 'perun', Komo: 'perun', Konola: 'perun', Krirald: 'perun',
-      Nalvula: 'perun', Otela: 'perun', Sakenta: 'perun', Arvasaras: 'perun', Otanuomi: 'perun',
+      Nalvula: 'perun', Otela: 'perun', Sakenta: 'perun', Otanuomi: 'perun',
+      // Svarog (red)
       Niarja: 'svarog', Harva: 'svarog', Kuharah: 'svarog', Nani: 'svarog', Raravoss: 'svarog',
       Skarkon: 'svarog', Tunudan: 'svarog', Ahtila: 'svarog', Urhinichi: 'svarog',
+      // Veles (green)
       Archee: 'veles', Ala: 'veles', Angymonne: 'veles', Ichoriya: 'veles', Kaunokka: 'veles',
-      Vale: 'veles', Wirashoda: 'veles', Senda: 'veles',
+      Vale: 'veles', Wirashoda: 'veles', Senda: 'veles', Arvasaras: 'veles',
     },
 
-  // Secondary Krai for shared border systems (split-border indicator)
-    KRAI_OVERLAP: { Arvasaras: 'veles', Otanuomi: 'svarog', Ahtila: 'veles' },
+    // No secondary / dashed Krai borders — each system has one Krai only
+    KRAI_OVERLAP: {},
 
     KRAI_HOME: { Kino: 'perun', Niarja: 'svarog', Archee: 'veles' },
 
@@ -1297,9 +1300,9 @@ function pochvenMapper() {
     HOME_SYSTEMS: ['Kino', 'Niarja', 'Archee'],
     BORDER_SYSTEMS: ['Arvasaras', 'Sakenta', 'Otanuomi', 'Ahtila', 'Urhinichi', 'Senda'],
     KRAI_SYSTEMS: {
-      perun:  ['Kino','Ignebaener','Komo','Konola','Krirald','Nalvula','Otela','Sakenta','Arvasaras','Otanuomi'],
+      perun:  ['Kino','Ignebaener','Komo','Konola','Krirald','Nalvula','Otela','Sakenta','Otanuomi'],
       svarog: ['Niarja','Harva','Kuharah','Nani','Raravoss','Skarkon','Tunudan','Ahtila','Urhinichi'],
-      veles:  ['Archee','Ala','Angymonne','Ichoriya','Kaunokka','Vale','Wirashoda','Senda'],
+      veles:  ['Archee','Ala','Angymonne','Ichoriya','Kaunokka','Vale','Wirashoda','Senda','Arvasaras'],
     },
     ROUTE_BULGE: 260,
     ROUTE_CLEARANCE: 110,
