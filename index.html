@@ -115,7 +115,7 @@
       <textarea x-model="rawText" rows="8" placeholder="Paste your EVE Online bookmark directory export here...
 
 Folder headers (Locations in Otela, Personal Locations [126]) are auto-filtered.
-Only wormhole lines like H-QGB-Obanen, P-GEJ-Otela, J-ABC-C2a, PP-GUQ-Vale are imported."
+Only wormhole lines like H-QGB-Obanen, W-NQA-[C1-3], W-XPD-C4/5, J-ABC-C2a, PP-GUQ-Vale are imported."
         class="w-full bg-black border border-red-900/50 rounded-lg p-4 text-sm font-mono text-zinc-300 placeholder-zinc-600 focus:outline-none focus:border-red-600 resize-y"></textarea>
       <div x-show="parseMessage" class="mt-2 text-sm" :class="parseError ? 'text-red-400' : 'text-emerald-400'" x-text="parseMessage"></div>
     </section>
@@ -336,7 +336,9 @@ function pochvenMapper() {
     PVP_FLASH_THRESHOLD: 8,
     ESI_PVP_REFRESH_MS: 15 * 60 * 1000,
 
-    WORMHOLE_REGEX: /^(H|J|P|PP|P2P)-([A-Z]{3})-([A-Za-z0-9][A-Za-z0-9\s.'-]*)/i,
+    WORMHOLE_REGEX: /^(H|L|N|J|W|P|PP|P2P)-([A-Z?]{3})(?:-((?:\[[^\]]+\])|[A-Za-z0-9?][A-Za-z0-9?\s.'\/-]*))?/i,
+    WH_CLASS_TAG_REGEX: /\[\s*(C\s*[1-6](?:\s*(?:[-–\/]|to)\s*C?\s*[1-6])?)\s*\]/i,
+    WH_CLASS_ONLY_REGEX: /^(C\s*[1-6](?:\s*[-–\/]\s*C?\s*[1-6])?)$/i,
 
     POCHVEN_SYSTEM_IDS: {
       Ahtila: 30045328, Ala: 30002652, Angymonne: 30003046, Archee: 30002702,
@@ -486,7 +488,32 @@ function pochvenMapper() {
     normalizeWormholeType(typeCode) {
       const t = (typeCode || '').toUpperCase();
       if (t === 'P2P') return 'PP';
+      if (t === 'W') return 'J';
       return t;
+    },
+
+    normalizeClassTag(raw) {
+      if (!raw) return null;
+      return raw
+        .replace(/\s+/g, '')
+        .replace(/to/gi, '-')
+        .replace(/–/g, '-')
+        .replace(/c(?=[1-6])/gi, 'C');
+    },
+
+    parseWormholeClassTag(text) {
+      if (!text) return null;
+      const bracket = text.match(this.WH_CLASS_TAG_REGEX);
+      if (bracket) return this.normalizeClassTag(bracket[1]);
+      const only = text.trim().match(this.WH_CLASS_ONLY_REGEX);
+      if (only) return this.normalizeClassTag(only[1]);
+      return null;
+    },
+
+    formatWormholeClassDisplay(classTag, sourceText) {
+      if (!classTag) return null;
+      if (sourceText && this.WH_CLASS_TAG_REGEX.test(sourceText)) return `[${classTag}]`;
+      return classTag;
     },
 
     isPpBookmark(entry) {
@@ -946,7 +973,7 @@ function pochvenMapper() {
       const firstField = (line.split('\t')[0] || line).trim();
       if (this.IRRELEVANT_NAMES.test(firstField)) return true;
 
-      if (!this.WORMHOLE_REGEX.test(firstField) && !/(H|J|P|PP)-[A-Z]{3}-/i.test(line)) return true;
+      if (!this.WORMHOLE_REGEX.test(firstField) && !/(H|L|N|J|W|P|PP|P2P)-[A-Z?]{3}/i.test(line)) return true;
       return false;
     },
 
@@ -961,7 +988,8 @@ function pochvenMapper() {
       }
 
       const nameField = this.col(parts, 0) || line;
-      const whMatch = nameField.match(this.WORMHOLE_REGEX) || line.match(/(H|J|P|PP|P2P)-([A-Z]{3})-([A-Za-z0-9][A-Za-z0-9\s.'-]*)/i);
+      const whMatch = nameField.match(this.WORMHOLE_REGEX)
+        || line.match(/(H|L|N|J|W|P|PP|P2P)-([A-Z?]{3})(?:-((?:\[[^\]]+\])|[A-Za-z0-9?][A-Za-z0-9?\s.'\/-]*))?/i);
       if (!whMatch) return null;
       return this.buildEntry(whMatch, parts, line, nameField, isTabDelimited);
     },
@@ -969,7 +997,20 @@ function pochvenMapper() {
     buildEntry(match, parts, fullLine, nameField, isTabDelimited = false) {
       const typeCode = this.normalizeWormholeType(match[1]);
       const sig = match[2].toUpperCase();
-      let destination = this.stripNameTags(match[3].trim());
+      let destination = match[3] ? this.stripNameTags(match[3].trim()) : '';
+
+      const classTag = this.parseWormholeClassTag(nameField) || this.parseWormholeClassTag(destination);
+      if (classTag) {
+        const classDisplay = this.formatWormholeClassDisplay(classTag, nameField)
+          || this.formatWormholeClassDisplay(classTag, destination)
+          || classTag;
+        if (!destination || this.WH_CLASS_ONLY_REGEX.test(destination) || this.WH_CLASS_TAG_REGEX.test(destination)) {
+          destination = classDisplay;
+        } else if (!/C\s*[1-6]/i.test(destination)) {
+          destination = `${destination} ${classDisplay}`.trim();
+        }
+      }
+      if (!destination) destination = 'Unknown';
 
       const C = this.COL;
       let origin = 'Unknown';
@@ -1054,12 +1095,13 @@ function pochvenMapper() {
         expiryDisplay = '—';
       }
 
-      const typeLabels = { H: 'Highsec', P: 'Pochven', J: 'Wormhole', PP: 'P-P Internal' };
+      const typeLabels = { H: 'Highsec', L: 'Lowsec', N: 'Nullsec', P: 'Pochven', J: 'Wormhole', PP: 'P-P Internal' };
 
       return {
         type: typeCode,
         typeLabel: `${typeCode} (${typeLabels[typeCode] || typeCode})`,
         sig, destination, origin, mass,
+        whClass: classTag || null,
         lifetimeTag,
         hasLifetimeTag,
         eol,
@@ -1212,6 +1254,8 @@ function pochvenMapper() {
     typeBadgeClass(type) {
       return {
         H: 'bg-emerald-900/60 text-emerald-300 border border-emerald-700',
+        L: 'bg-yellow-900/60 text-yellow-300 border border-yellow-700',
+        N: 'bg-red-900/60 text-red-300 border border-red-700',
         P: 'bg-orange-900/60 text-orange-300 border border-orange-700',
         J: 'bg-blue-900/60 text-blue-300 border border-blue-700',
         PP: 'bg-purple-900/60 text-purple-300 border border-purple-700'
