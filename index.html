@@ -928,6 +928,18 @@ function pochvenMapper() {
 
   // ─── Parsing ────────────────────────────────────────────────────
 
+    entryDedupeKey(entry) {
+      const scanned = entry.scannedTimeMs != null
+        ? String(entry.scannedTimeMs)
+        : (entry.scannedTime || '—');
+      return [
+        this.normSystem(entry.origin),
+        (entry.sig || '').toUpperCase(),
+        this.normSystem(entry.destination),
+        scanned,
+      ].join('|');
+    },
+
     parseRawText() {
       this.parseMessage = '';
       this.parseError = false;
@@ -935,7 +947,7 @@ function pochvenMapper() {
 
       const lines = this.rawText.split(/\r?\n/);
       let added = 0, skipped = 0;
-      const existingKeys = new Set(this.entries.map(e => `${this.normSystem(e.origin)}|${e.sig}|${this.normSystem(e.destination)}`));
+      const existingKeys = new Set(this.entries.map(e => this.entryDedupeKey(e)));
 
       for (const line of lines) {
         const trimmed = line.trim();
@@ -943,7 +955,7 @@ function pochvenMapper() {
         if (this.isFolderOrIrrelevant(trimmed)) { skipped++; continue; }
         const parsed = this.parseWormholeLine(trimmed);
         if (!parsed) { skipped++; continue; }
-        const key = `${this.normSystem(parsed.origin)}|${parsed.sig}|${this.normSystem(parsed.destination)}`;
+        const key = this.entryDedupeKey(parsed);
         if (existingKeys.has(key)) { skipped++; continue; }
         existingKeys.add(key);
         parsed.id = this.nextId++;
@@ -1905,7 +1917,19 @@ function pochvenMapper() {
 
       for (const entry of this.entries) {
         if (this.isEntryExpired(entry)) continue;
-        const key = pairKey(entry.origin, entry.destination);
+        const type = this.normalizeWormholeType(entry.type);
+        let key = pairKey(entry.origin, entry.destination);
+
+        // Wormholes (J / normalized W): separate map links per signature set
+        // so USK and NQA between the same systems stay distinct.
+        // Include returnSig (sorted) so true two-way legs still group together.
+        if (type === 'J') {
+          const sigs = [(entry.sig || '').toUpperCase(), (entry.returnSig || '').toUpperCase()]
+            .filter(Boolean)
+            .sort();
+          key = `${key}||J||${sigs.join('::') || 'UNKNOWN'}`;
+        }
+
         if (!linkMap[key]) linkMap[key] = { legs: [] };
         linkMap[key].legs.push(entry);
       }
@@ -1960,7 +1984,11 @@ function pochvenMapper() {
 
         const extName = !fromIsP ? link.from : link.to;
         const anchorName = fromIsP ? link.from : link.to;
-        const key = this.normSystem(extName);
+        const bookmarkType = this.normalizeWormholeType(type);
+        // Wormholes: one dock/connector per signature so distinct holes don't collapse
+        const key = bookmarkType === 'J'
+          ? `${this.normSystem(extName)}||${this.normSystem(anchorName)}||${(fwd.sig || '').toUpperCase()}`
+          : this.normSystem(extName);
         const anchor = this.findPochvenSystem(anchorName);
 
         if (!externalMap.has(key)) {
@@ -2008,12 +2036,16 @@ function pochvenMapper() {
           y = this.DOCK_TOP_Y + index * this.DOCK_ROW_H;
         }
         const sec = this.secClassFromType(ext.type);
-        const key = this.normSystem(ext.name);
+        const isWh = this.normalizeWormholeType(ext.bookmarkType) === 'J' || ext.type === 'J';
+        const key = isWh
+          ? `${this.normSystem(ext.name)}||${this.normSystem(ext.anchor)}||${(ext.sig || '').toUpperCase()}`
+          : this.normSystem(ext.name);
         positions[key] = {
           x, y, isPochven: false, name: ext.name, dock, sec,
           anchor: ext.anchor, anchorPos: ext.anchorPos,
           sig: ext.sig, returnSig: ext.returnSig, twoWay: ext.twoWay,
           eol: ext.eol, expired: ext.expired, type: ext.type, jumps: ext.jumps,
+          bookmarkType: ext.bookmarkType,
         };
         if (ext.anchorPos) {
           connectors.push({ external: positions[key], anchor: ext.anchorPos, meta: ext });
